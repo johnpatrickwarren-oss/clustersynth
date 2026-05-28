@@ -200,3 +200,45 @@ During the end-to-end integration dry run (cloning tessera, running its 714-test
 **Forward-looking discipline:** when an audit-sidecar V-variant enumerates an outcome that contradicts a spec AC, the AC SHOULD be tightened at spec-emit time, not at reviewer-time. Treat V-enumeration as a pre-emit-grilling output, not just a post-mortem placeholder.
 
 ---
+
+## R06 (2026-05-28) — Federation-aware common-mode attribution test (tessera PR #7)
+
+### R06.M1 — Verify ID schema by `node -e` against the actual fixture before composing into spec
+
+**Class:** Memorial F sub-rule 4 (pre-existing-property-coherence) — and a process-level lesson about composing schemas mentally.
+
+**What happened:** Q-R06-SPEC § Architectural mechanism listed shard ID prefix as `campus-0-cluster-0-rack-0-` and derived a hop-distance table from there. The actual clustersynth shard ID at C0 is `campus-0-cluster-0-pod-0-rack-0-tray-0-gpu-0` — the `pod-0-` segment is between cluster and rack. The architect composed the ID schema mentally from reading `buildPod` and `buildClusterCore` separately, instead of running `node -e "JSON.parse(...).nodes.filter(n=>n.kind==='gpu_shard')[0]"` against the actual fixture.
+
+**Why this matters:** the first R06 test run failed AC-R06-2 because `shardsInRack(snap, 'campus-0-cluster-0-rack-0-').slice(0, 2)` returned zero matches — no shards begin with that prefix. The test caught it within seconds; the spec didn't.
+
+**The hop-distance threshold was right anyway:** the corrected path (with the +1 hop pod adds) still puts the cross-cluster threshold at exactly 8 hops — exactly what the spec predicted. So the architect happened to be right about the headline number even with the wrong path. This is dangerous discipline — being right by accident is worse than being right by reasoning.
+
+**Resolution:** test prefixes updated to include `pod-0-`. AC-R06-5 empirical result confirmed the 8-hop threshold.
+
+**Forward-looking discipline:** when a spec composes ID schemas across multiple builder files, the architect MUST run `node -e` (or equivalent) against the actual generated artifact to verify the schema before writing tests against it. Reading builder source is not the same as observing builder output. Generalizes R01.M1's "compute the budget" and R03.M1's "open the actual type definition" — extends to "observe the actual generated artifact."
+
+### R06.M2 — Confirmation: structural invariant verified empirically with exact threshold match
+
+**Class:** Confirmation of architect pre-prediction landing.
+
+**What happened:** Q-R06-SPEC-AUDIT pre-predicted "at hop=10, ≥ 1 cross-cluster candidate" and the hop-distance table predicted the threshold at 8. Empirical AC-R06-5: hop=6 = 0 cross-cluster, hop=8 = 400 (18%), hop=10 = 4,000 (100%). The threshold landed exactly at hop=8 as predicted from the structural argument.
+
+**Why this matters:** R06 is the cleanest pre-prediction calibration across R04+R05+R06. The architect derived the hop count from first principles (BFS on undirected edges + clustersynth's contains-chain depth + campus aggregator topology) and the empirical result matched within one hop. Compare to R04 where attribution wall time pre-prediction missed by 6× and R05 where short-bounded detection rates missed entirely.
+
+**Forward-looking discipline:** structural pre-predictions (count theorems on graph topology) tend to be more accurate than performance pre-predictions (cost extrapolations across hardware). When a round can be reduced to a structural property, prefer that framing over a measurement framing.
+
+### R06.M3 — Confirmation: three-round sequence closes the original empirical question
+
+**Class:** Confirmation of methodology adaptation across R04+R05+R06.
+
+**What happened:** the user's framing question was "I'd like proof that tessera can actually work at scale and whether it affects actual cluster performance, even at a control plane level." The three rounds together close this with measured artifacts:
+
+- **R04 (per-window cost):** 0.6 cores at 72K shards at 1s cadence with MMD cross-term floor — published number anchored to the C0 + S3 fixtures
+- **R05 (sampling envelope):** α-preserved under sparse MMD sampling; ~k× detection latency scaling; short-lived drift missed entirely at k ≥ 5 — empirical map with 168 cells
+- **R06 (federation):** federation isolation structural at operational max_hop ≤ 6; contamination threshold at hop=8 — verified against C0 fixture
+
+Three different shapes of artifact (timing report, envelope matrix, property test) produced by three rounds with proportionate Anchor discipline at each. Each anchored to a clustersynth fixture; each producing a tessera PR.
+
+**Forward-looking discipline:** for an empirical question that spans multiple measurement classes (cost, behavior, structure), prefer decomposing into one round per class rather than one heavy round trying to cover all. The PRD-level question "does it work at scale" is best answered by composing artifacts, not by producing a single super-report.
+
+---
