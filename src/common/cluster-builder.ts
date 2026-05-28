@@ -102,8 +102,11 @@ export function buildCluster(opts: BuildOpts): TopologySnapshot {
     const pods = PODS_PER_SCALE[opts.scale];
     const withSpines = opts.scale === 's2' || opts.scale === 's3';
     const core = buildClusterCore(opts.family, 'cluster-0', pods, withSpines);
-    nodes.push(...core.nodes);
-    edges.push(...core.edges);
+    // for-of rather than spread: at S3, core carries ~218K nodes / ~1.1M edges,
+    // exceeding V8's variadic-args call-stack limit for nodes.push(...big_array).
+    // Same fix as the c0 branch above; see clustersynth MEMORIAL R02.M1.
+    for (const n of core.nodes) nodes.push(n);
+    for (const e of core.edges) edges.push(e);
   }
 
   const buildTag = rng.nextU32().toString(16).padStart(8, '0');
