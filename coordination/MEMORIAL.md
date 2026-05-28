@@ -83,3 +83,42 @@ Per Anchor [`skills/02-memorial-accretion.md`](https://github.com/johnpatrickwar
 **Forward-looking discipline:** when sizing a new fixture or test case, enumerate the *types of variation* it could expose (count, shape, time-evolution, partition structure) before defaulting to "bigger." Memorial D — architectural-layer-coverage — applies to fixture design, not just to hypothesis trees for bug investigation.
 
 ---
+
+## R03 (2026-05-28) — empirical integration with Tessera; R01.M2 correction
+
+### R03.M1 — R01.M2 was wrong: Tessera's NodeKind union is closed, not structurally open
+
+**Class:** Memorial F sub-rule 2 (schema-precedent-recheck) violation — and an explicit correction of a previous Memorial entry.
+
+**What happened:** Q-R01-SPEC § Existing architectural surface + R01.M2 confirmation entry asserted that "Tessera consumers treat the kind/relationship strings as structural (open) rather than closed unions" based on reading `tessera/test/_substrate/v9X-cluster.ts` and noting `import type { TopologyNode, TopologyEdge, TopologySnapshot }` — concluding "structural import = open types." That conclusion was wrong.
+
+During the end-to-end integration dry run (cloning tessera, running its 714-test suite, writing a smoke test that imports clustersynth fixtures), TypeScript surfaced the actual surface: the engine's `TopologyNode.kind` is an inline closed literal union over exactly 11 values (`service | database | queue | external | gpu_shard | rack | psu | cooling_zone | trainium_chip | inferentia_chip | tpu_shard`). Every clustersynth-added kind (`cluster`, `cpu_shard`, `superchip`, `nvlink_switch`, `nic`, `tor_switch`, `leaf_switch`, `spine_switch`, `pod`, `campus`, `site_wan_router`) fails union narrowing in a consumer. At runtime the JSON is strings-as-strings and loads fine, but a Tessera consumer doing `switch (n.kind) { case '...': ... }` never matches clustersynth-added kinds.
+
+**Why R01.M2 reached the wrong conclusion:** the spec-time check looked at `v9X-cluster.ts`'s `import type` statement and stopped — never opened `engine/types/verdict.ts` to see the actual `kind:` literal union. This is precisely the file-opened (P3.3) discipline gap. The previously-memorialized lesson from R01.M1 ("compute the budget, don't recall it") generalizes: *recheck the actual source of truth at every layer the claim spans*. Reading the import statement is not the same as reading the type definition.
+
+**Discipline anchor that caught it:** Implementer-time empirical run (T2). The TypeScript compiler error message is the empirical evidence; the spec-time review never opened the engine's actual union definition.
+
+**Resolution (carried out in this round):**
+1. Engine PR opened — [deploysignal-engine#12](https://github.com/johnpatrickwarren-oss/deploysignal-engine/pull/12) adds `types/verdict-extensions/cluster-topology.ts` exporting `ClusterTopologyKind` + `ClusterEdgeRelationship` as separate optional unions. **Strictly additive** to the engine's surface — no existing types modified, no exhaustive switches broken for any other engine consumer.
+2. Tessera PR opened — [tessera#4](https://github.com/johnpatrickwarren-oss/tessera/pull/4) composes the extension with the engine's base via indexed access (`type TesseraNodeKind = TopologyNode['kind'] | ClusterTopologyKind`) and lands a 5-test contract smoke test against clustersynth-emitted S2 + C0 fixtures.
+3. clustersynth itself unchanged — the JSON contract it emits was always correct at runtime; the spec-time claim about consumer-side open-ness was the error.
+
+**Forward-looking discipline:** when claiming a downstream-consumer property (closed-union vs open, exhaustive-switch behavior, etc.), open the actual type definition at the actual repo at the actual SHA — not just an import statement in a sibling file. The P3.3 file-opened axis applies to *type-system claims* not just runtime-value claims.
+
+### R03.M2 — Confirmation: empirical integration is the cheapest discipline anchor
+
+**Class:** Confirmation of T2 (Implementer-time) anchor effectiveness.
+
+**What happened:** R01 + R02 reviewers (T3 anchor) signed off on the clustersynth/Tessera contract claim based on spec-time reasoning. The actual integration error was caught in the first 5 minutes of trying to import the JSON into a Tessera test. The empirical T2 anchor surfaced what 3 rounds of spec-time review missed.
+
+**Forward-looking discipline:** for any cross-repo contract claim, schedule an integration dry-run *during* the spec-implementation cycle, not after. The cost is one test, written in the consumer's repo, that imports the producer's output. If it doesn't compile, the contract claim is wrong. Cheaper than every other anchor.
+
+### R03.M3 — Confirmation: non-breaking-extension pattern protects existing consumers
+
+**Class:** Confirmation of architectural decision.
+
+**What happened:** The natural fix for R03.M1 would have been to widen the engine's existing `NodeKind` union (add the 11 cluster kinds). That widening would have silently broken any exhaustive switch (`default: const _: never = n.kind`) in any existing engine consumer — DeploySignal proper and any other not-yet-known dependent. The alternative — a new optional extension type in a separate exported subpath — gives every adopter the same expressiveness without changing what any non-adopter sees.
+
+**Forward-looking discipline:** when a downstream consumer needs vocabulary extensions to a shared engine's closed type, default to **additive optional extensions** (separate exported types, composed by adopters via indexed access + union) rather than direct widening. Direct widening should require an explicit ADR.
+
+---
