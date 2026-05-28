@@ -1,0 +1,26 @@
+{
+  "name": "clustersynth",
+  "version": "0.1.0",
+  "description": "Synthetic GB200/GB300 cluster fixtures for Tessera (Anchor methodology worked-example)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "clustersynth": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx --test test/*.test.ts",
+    "fixtures": "tsx src/build-fixtures.ts",
+    "cli": "tsx src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}

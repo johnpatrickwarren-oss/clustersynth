@@ -1,0 +1,6 @@
+node_modules/
+dist/
+fixtures/*-s3-*.json
+fixtures/*-c0-*.json
+*.log
+.DS_Store
