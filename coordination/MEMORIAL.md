@@ -2,7 +2,7 @@
 
 Cross-round accretion ledger. Append-only. Each entry is one round's discipline outcome — a violation prevented, a confirmation observed, or an architect pre-prediction landing.
 
-Per Anchor [`skills/02-memorial-accretion.md`](https://github.com/johnpatrickwarren-oss/oss/anchor/blob/main/skills/02-memorial-accretion.md): the load-bearing work is the *explicit enumeration* of what happened, not the rank-ordering. Track confirmations as well as violations — selecting only failures biases the ledger toward over-cautious future behavior.
+Per Anchor [`skills/02-memorial-accretion.md`](https://github.com/johnpatrickwarren-oss/anchor/blob/main/skills/02-memorial-accretion.md): the load-bearing work is the *explicit enumeration* of what happened, not the rank-ordering. Track confirmations as well as violations — selecting only failures biases the ledger toward over-cautious future behavior.
 
 ---
 
