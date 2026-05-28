@@ -164,3 +164,39 @@ During the end-to-end integration dry run (cloning tessera, running its 714-test
 **Forward-looking discipline:** for projects positioned as test-instruments, NFR-2 ("no runtime dep on consumer") is load-bearing precisely because consumers are downstream — once a consumer adopts the artifact, the instrument's dependency surface becomes the consumer's dependency surface. R04 confirms this scopes cleanly when the harness lives in the consumer, not in the instrument.
 
 ---
+
+## R05 (2026-05-28) — MMD sampling-interval envelope (tessera PR #6)
+
+### R05.M1 — Bandwidth-as-data-scale-floor discipline (empirical discovery)
+
+**Class:** Memorial F sub-rule 4 (pre-existing-property-coherence) — a spec-time stipulation that proved empirically wrong.
+
+**What happened:** Q-R05-SPEC stipulated `BANDWIDTH = 1.0` with the note "stipulated; production uses median-heuristic." First-pass envelope ran with this value and showed 0/5 detections at **every cell** including persistent_linear at maximum magnitude. Probe revealed the cause: at p=11 unit-variance Gaussian, typical pairwise distances are √(2·11) ≈ 4.7; with bandwidth=1, the RBF kernel `exp(-||x-y||²/(2·1))` collapses to exp(-11) ≈ 10⁻⁵. All u_t values were buried in numerical noise. No drift signal could grow wealth.
+
+**Why the spec was wrong:** the architect treated bandwidth as a "tunable that we'll fix in production." It is actually a *load-bearing* parameter that must match the data scale or the kernel becomes useless. For Gaussian kernels, bandwidth less than ~½ × √(median pairwise distance²) collapses the kernel; bandwidth greater than ~10× explodes it (rbf ≈ 1 everywhere).
+
+**Resolution:** bandwidth set to `Math.sqrt(2 * p)` ≈ 4.69 — the analytical median-heuristic equivalent for p-dim unit-variance Gaussian. With this, u_t at drift=1 went from ~0.0036 to ~0.27 (75× improvement); u_t at drift=5 saturated to ~1.25 (the right behavior, gets clipped to 1).
+
+**Forward-looking discipline:** any kernel-method bandwidth value committed in a spec MUST be sanity-checked against the expected `||baseline_pair_dist||` distribution before the spec is sealed. If the spec doesn't have a probe verifying bandwidth produces non-degenerate kernel values on the simulated baseline, the spec is incomplete. This generalizes R01.M1's "compute the budget, don't recall it" — extended to "compute the kernel response, don't assume it."
+
+### R05.M2 — Cross-detector pre-prediction calibration pitfall
+
+**Class:** Confirmation + carry-forward of R04.M2's calibration discipline.
+
+**What happened:** Q-R05-SPEC-AUDIT pre-predictions for `short_bounded` were calibrated against R77's betting envelope (e.g., "magnitude=0.05, k=1: ~ 2-3/5 detections per R77 boundary at window_count=30"). Empirically, MMD at magnitude=0.05 with 30 windows of drift detected 0/5 — strictly worse than betting at the same operating point. Pre-prediction was wrong by carrying betting calibration into MMD territory.
+
+**Why:** MMD is a *distributional* test (compares two empirical distributions via U-stat); betting is a *moment* test (compares running second moments). At small magnitude × short duration, the distributional shift is harder to distinguish from noise than the moment shift. This is the right behavior; the pre-prediction was wrong to assume the boundary curves are the same shape.
+
+**Forward-looking discipline (extends R04.M2):** when pre-predicting detection probabilities for detector family X, do NOT carry calibration from detector family Y unless the two have demonstrably-similar boundary behavior. If unknown, predict in qualitative terms ("magnitude ≥ X should saturate") rather than quantitative cell-by-cell rates.
+
+### R05.M3 — Confirmation: V-variant enumeration prevents in-round AC drift
+
+**Class:** Confirmation of audit-sidecar discipline.
+
+**What happened:** Q-R05-SPEC-AUDIT enumerated three V-variants. V2 explicitly predicted "Persistent-drift saturation fails at k=100 because 200 windows / 100 = 2 evaluations isn't enough wealth accumulation." Empirically: confirmed — k=100 = 0/5 at every magnitude including maximum. AC-R05-4 (which originally claimed "every cell = 5/5") was amended in-round to "k ≤ 10" + a carve-out test for k=100 = 0.
+
+**Why this is right:** the audit sidecar's job is precisely to enumerate variants the spec hasn't accounted for. V2 was right; the AC was wrong; the discipline caught it before publication. The amendment-in-round is the correct response — the spec adapts to empirical reality, the audit's enumeration validated.
+
+**Forward-looking discipline:** when an audit-sidecar V-variant enumerates an outcome that contradicts a spec AC, the AC SHOULD be tightened at spec-emit time, not at reviewer-time. Treat V-enumeration as a pre-emit-grilling output, not just a post-mortem placeholder.
+
+---
