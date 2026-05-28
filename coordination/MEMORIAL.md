@@ -242,3 +242,44 @@ Three different shapes of artifact (timing report, envelope matrix, property tes
 **Forward-looking discipline:** for an empirical question that spans multiple measurement classes (cost, behavior, structure), prefer decomposing into one round per class rather than one heavy round trying to cover all. The PRD-level question "does it work at scale" is best answered by composing artifacts, not by producing a single super-report.
 
 ---
+
+## R07 (2026-05-28) — Full computeUt bench column (corrects R04 measurement honesty gap)
+
+### R07.M1 — Memorialized caveats must be instrumented, not just documented
+
+**Class:** Memorial F sub-rule 4 (pre-existing-property-coherence) + process-level lesson about caveat surfacing.
+
+**What happened:** R04.M3 explicitly memorialized that the bench's MMD column was the cross-term floor, not full `computeUt`. The R04 PR description, the bench report header, and `bench/README.md` all repeated the caveat. The user nonetheless read the headline "0.6 cores at S3" as production cost — the caveat lived alongside the number rather than next to a contrasting number, so it didn't anchor.
+
+**The discipline lesson:** a documented caveat is necessary but not sufficient. When a measurement omits ~30× of the cost it appears to measure, the right response is to *publish a parallel measurement of the omitted portion* in the same table, not just to note the omission. Headlines anchor; footnotes don't.
+
+**Resolution:** R07 amends the R04 bench to publish both `mmd_floor` and `mmd_full` columns side-by-side. The cadence table grows from 4 to 6 columns spanning {no MMD, MMD floor, MMD full, MMD@k=10}. The honest number is now bold + adjacent to the floor; no reader can mistake them.
+
+**Forward-looking discipline:** when a bench column captures a fraction of the named cost (e.g., one term of a multi-term U-statistic, one phase of a multi-phase pipeline), the bench MUST emit either (a) both the fraction and the full cost as separate columns, or (b) only the full cost — never just the fraction with a footnote. Generalize R04.M3's per-round caveat into a tooling pattern: any partial measurement needs a parallel full measurement in the same artifact.
+
+### R07.M2 — Confirmation: structural / arithmetic pre-predictions are the most calibrated
+
+**Class:** Confirmation of R06.M2's structural-vs-performance prediction pattern.
+
+**What happened:** R07's pre-predictions landed within band on every metric — mmd_full µs/shard (predicted 50-150, got 102-110), floor→full ratio (predicted 25-40×, got 30-33×), S3 full-MMD cores (predicted 5-10, got 8.3), S3 MMD@k=10 cores (predicted 0.8-1.5, got 1.17). Compare to R04 (attribution miss by 6×) and R05 (short-bounded miss in band entirely). R07 is the cleanest pre-prediction round so far.
+
+**Why:** R07's pre-predictions were derived from:
+1. Algebraic counts (≈15,870 kernel evals at b=30, m=500 → ~32× the floor's 500)
+2. R04's already-measured M5 cost baseline (welford was 5× faster than Linux predictions; same factor applied to MMD)
+3. The prior cost-characterization conversation's 412 µs/shard Intel number, divided by the same factor
+
+When the prediction is a multiplication of (algebraic count) × (already-measured constant) × (already-measured constant), it tends to land. When it's "based on this similar-detector calibration" (R05.M2 betting → MMD) or "based on what should be fast" (R04 attribution at S2), it doesn't.
+
+**Forward-looking discipline (sharpens R06.M2):** the most-accurate pre-predictions are products of (counted operations) × (per-operation cost measured in the same round or session) × (hardware-class factor measured in the same round or session). If any factor in the product is "by analogy" or "should be reasonable," widen the predicted band by 5×.
+
+### R07.M3 — Confirmation: amending an open PR with a corrective round is the right discipline shape
+
+**Class:** Confirmation of round/PR boundary decision.
+
+**What happened:** R04 (commit `bfeea4d`) sat on PR #5 unmerged when the user surfaced the headline-reading issue. R07 had two viable shapes: (a) close PR #5, open a new R07-PR with R04+R07 combined; (b) amend PR #5 with R07 as a second commit on the same branch, update PR description to span both rounds. Chose (b).
+
+**Why (b):** R07 is corrective to R04, not independent. Closing R04 PR + reopening would lose the existing PR's review thread and obscure the R04 → R07 progression. Amending PR #5 preserves the commit history (R04's commit is still there with its original message; R07's commit shows the diff), surfaces the round transition clearly, and avoids the noise of a closed/reopened pair. The PR description rewrite makes the multi-round nature visible.
+
+**Forward-looking discipline:** when a round corrects a still-unmerged round's deliverable, amend the existing PR with a new commit rather than opening a new PR. Reserve new-PR for genuinely independent deliverables (R05, R06 — separate matrices, separate tests) or for cases where the prior PR is already merged.
+
+---
