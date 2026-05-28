@@ -122,3 +122,45 @@ During the end-to-end integration dry run (cloning tessera, running its 714-test
 **Forward-looking discipline:** when a downstream consumer needs vocabulary extensions to a shared engine's closed type, default to **additive optional extensions** (separate exported types, composed by adopters via indexed access + union) rather than direct widening. Direct widening should require an explicit ADR.
 
 ---
+
+## R04 (2026-05-28) — Per-window cost bench (tessera PR #5)
+
+### R04.M1 — Carry-forward gap: V8 spread-push fix only patched the surfacing path
+
+**Class:** Memorial F sub-rule 4 (pre-existing-property-coherence) — and a structural lesson about scope of idiom-level fixes.
+
+**What happened:** R02.M1 memorialized the V8 ~64K variadic-args limit blown by `nodes.push(...big_array)` and recorded the fix at the c0 path in `cluster-builder.ts`. The fix was applied surgically — only to the c0 branch where the failure surfaced. The flat-cluster branch (S1/S2/S3) kept the original spread idiom; S2 at 21K nodes stayed under the limit, but S3 at 218K nodes tripped the same call-stack overflow during R04 bench work.
+
+**Why R02 missed it:** the original fix was scoped to "the code path that broke," not "every code path that uses this idiom against arrays that could plausibly exceed the limit." Forward-looking discipline would have been a grep for `nodes.push(...` / `edges.push(...` across the file at fix-time and a count of the upper-bound array size at each site.
+
+**Resolution:** clustersynth `main` commit `39f8968` — for-of replacement in the flat-cluster branch. R01/R02 fixture SHAs preserved.
+
+**Forward-looking discipline (extends R02.M1):** when fixing an idiom-level bug (V8 limits, prototype-pollution holes, async-leak patterns, etc.), grep the file for the *idiom* not just the *site*. Catalog every match against the failure's necessary condition. Patch all sites in the same change. Add the catalog to the commit message so future readers see the sweep was done.
+
+### R04.M2 — Confirmation: Apple Silicon shifts the cost-class baseline materially
+
+**Class:** Confirmation + architect-pre-prediction calibration note.
+
+**What happened:** Architect pre-predictions in Q-R04-SPEC-AUDIT § Architect pre-predictions were calibrated against the prior cost-characterization conversation's numbers (presumably Intel/Linux). Apple M5 measurements come in 5-10× faster on raw arithmetic + Float64 SIMD inner loops: Welford 0.2 µs vs predicted 1-4 µs, betting 6-12 ns vs predicted 30-100 ns, e-BH 4 ms vs predicted 15-50 ms at N=72K. The single substantive miss was on `attributeCommonMode` — predicted 5 ms at S2, got 31 ms (6× over), driven by the topology being denser (~110K edges, not just 21K nodes) than the node-count-only estimate captured.
+
+**Forward-looking discipline:** for any wall-time pre-prediction on graph algorithms, base the estimate on `O(V + E)` not `O(V)`. For any pre-prediction sized against another hardware class, record the calibration class explicitly in the prediction line so the reviewer-time miss-magnitude is interpretable.
+
+### R04.M3 — Architectural choice: bench MMD column is a cross-term floor, not full computeUt
+
+**Class:** Documented scope choice — recorded here for cross-round legibility because future readers will compare these numbers to the prior conversation's 412 µs/shard.
+
+**What happened:** Q-R04-SPEC § Q-R04.1 explicitly picked "primitives only" over the full `evaluateEMmd` end-to-end path because the latter requires a `CompiledConfig` object whose construction was identified by both this round and the prior conversation as scope-explosion-class work. The bench's `mmdRbfCrossSum` measures m=500 rbf cross-terms per shard per window — the bare floor of the MMD U-statistic. At the engine's typical b=30 accumulation, the full `computeUt` is ~30× heavier (per the source comment on `sequential-mmd.ts`).
+
+**Why this is the right scope:** R04's job is to anchor primitive-level costs to *fixture shard counts* and to add the missing `attributeCommonMode` end-to-end measurement. Reproducing the full `computeUt` cost would have required CompiledConfig + per-shard CellKey indexing + BaselineCellEntry pools + deploy event scaffolding. Per-window architect time is bounded; the floor + a clearly-labeled note achieves the publishable cores number with the right caveat.
+
+**Forward-looking discipline:** when a measurement is a partial decomposition of a target metric, the harness MUST emit the target metric's full name with a "floor" / "ceiling" qualifier prominently. Never let downstream readers infer the full cost from a partial cost without the qualifier. R04's bench report header + bench/README.md + every example file emit this caveat explicitly.
+
+### R04.M4 — Confirmation: clustersynth as test-instrument crosses cleanly from artifact-producer
+
+**Class:** Confirmation of architectural decision.
+
+**What happened:** R04 is the first round where clustersynth is consumed by an external test harness (tessera/bench/) rather than producing JSON artifacts for inspection. The PRD-01 NFR-2 invariant ("zero @johnpatrickwarren-oss/* runtime dep") held — the bench lives in tessera (which already depends on the engine), and clustersynth still ships only JSON. The cross-repo composition (clustersynth fixtures → tessera bench → engine primitives) demonstrated end-to-end via the bench harness and the R03 smoke test.
+
+**Forward-looking discipline:** for projects positioned as test-instruments, NFR-2 ("no runtime dep on consumer") is load-bearing precisely because consumers are downstream — once a consumer adopts the artifact, the instrument's dependency surface becomes the consumer's dependency surface. R04 confirms this scopes cleanly when the harness lives in the consumer, not in the instrument.
+
+---
