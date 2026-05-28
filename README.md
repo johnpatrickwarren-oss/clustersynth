@@ -82,6 +82,31 @@ Or load from disk:
 const snap = JSON.parse(readFileSync('fixtures/gb200-s1-720.json', 'utf8'));
 ```
 
+### Type-safe consumption (engine ≥ v0.3.1-pre)
+
+clustersynth emits 11 cluster-vocabulary kinds (`cluster`, `cpu_shard`, `superchip`, `nvlink_switch`, `nic`, `tor_switch`, `leaf_switch`, `spine_switch`, `pod`, `campus`, `site_wan_router`) and 5 cluster relationships (`nvlink_switched`, `pcie_peer`, `power_supply`, `cooling`, `network_link`) on top of the engine's base `NodeKind` / `EdgeRelationship` unions. The base unions are closed (consumed by exhaustive switches downstream), so the cluster vocabulary ships as **optional opt-in extension types** in `deploysignal-engine` from **v0.3.1-pre** onward ([engine PR #12](https://github.com/johnpatrickwarren-oss/deploysignal-engine/pull/12), released 2026-05-28).
+
+Cluster-aware consumers compose explicitly:
+
+```ts
+import type {
+  TopologyNode,
+  TopologyEdge,
+  TopologySnapshot,
+} from '@johnpatrickwarren-oss/deploysignal-engine/types/verdict';
+import type {
+  ClusterTopologyKind,
+  ClusterEdgeRelationship,
+} from '@johnpatrickwarren-oss/deploysignal-engine/types/verdict-extensions/cluster-topology';
+
+type ClusterNodeKind = TopologyNode['kind'] | ClusterTopologyKind;
+type ClusterEdgeRel = TopologyEdge['relationship'] | ClusterEdgeRelationship;
+```
+
+Non-cluster engine consumers (DeploySignal, etc.) see zero schema-surface change — the extension types are a separate file under a new subpath, not a widening of the base unions.
+
+Tessera adopts this composition pattern and ships a contract smoke test at `test/q-clustersynth-smoke.test.ts` ([tessera PR #4](https://github.com/johnpatrickwarren-oss/tessera/pull/4)) covering envelope shape, referential integrity, cluster-kind narrowing, and the C0 federation partition invariant.
+
 ## What's NOT in scope
 
 - **Per-shard counter time-series** — Tessera's `test/_substrate/synthetic-counter-generator.ts` owns that layer. clustersynth gives the rack; tessera gives the per-shard traffic.
@@ -94,13 +119,13 @@ See [`coordination/PRD.md`](./coordination/PRD.md) § Out-of-scope for the full 
 
 ## Methodology
 
-clustersynth is also a worked example of the [Anchor](https://github.com/johnpatrickwarren-oss/anchor) four-role coordination methodology — applied at the smallest viable scale (one author, two rounds). The `coordination/` tree contains:
+clustersynth is also a worked example of the [Anchor](https://github.com/johnpatrickwarren-oss/anchor) four-role coordination methodology — applied at the smallest viable scale (one author, three rounds). The `coordination/` tree contains:
 
 - `PRD.md` — product requirements with acceptance criteria
 - `specs/Q-R01-SPEC.md` + `Q-R01-SPEC-AUDIT.md` — Architect brief + audit sidecar for round 1 (core generators S0–S3)
 - `specs/Q-R02-SPEC.md` + `Q-R02-SPEC-AUDIT.md` — round 2 (campus shape variant + scale-vs-shape framing)
 - `reviews/REVIEWER-REPORT-R01.md` + `REVIEWER-REPORT-R02.md` — post-implementation T3 audits
-- `MEMORIAL.md` — cross-round discipline accretion ledger (4 R01 entries + 3 R02 entries)
+- `MEMORIAL.md` — cross-round discipline accretion ledger (4 R01 + 3 R02 + 3 R03 entries; R03 is a memorial-only round capturing the empirical Tessera integration findings — engine extension PR, Tessera adoption PR, and the explicit correction of R01.M2's closed-vs-open NodeKind claim)
 
 Notable discipline events captured in `MEMORIAL.md`:
 
