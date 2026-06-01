@@ -27,7 +27,7 @@ pnpm cli gb200 c0 --out campus.json     # federated campus: 4 × S2 sub-clusters
 
 S0–S3 are flat-cluster scale tiers, each exactly 10× the previous on GPU count — the envelope to characterize Tessera's per-shard / hierarchical / e-BH detection math across four orders of magnitude.
 
-**C0 is not S4.** Adding a fifth count tier (10× S3 = 720K shards) would exercise the same statistical regime, just with larger N. C0 is a different kind of fixture — it changes the topology *shape* to expose a behavior S0–S3 cannot: federation across administrative domains. Four S2-equivalent sub-clusters live under a `campus` root connected by 4 `site_wan_router` nodes; every spine ↔ every WAN router. Each sub-cluster's nodes carry the prefix `campus-0-cluster-{i}-` so a consumer can partition detector state by sub-cluster (separately baselined, separately FDR-controlled) while still combining verdicts at the campus level. See `coordination/specs/Q-R02-SPEC.md` § Spec + `coordination/MEMORIAL.md § R02.M3` for the reasoning.
+**C0 is not S4.** Adding a fifth count tier (10× S3 = 720K shards) would exercise the same statistical regime, just with larger N. C0 is a different kind of fixture — it changes the topology *shape* to expose a behavior S0–S3 cannot: federation across administrative domains. Four S2-equivalent sub-clusters live under a `campus` root connected by 4 `site_wan_router` nodes; every spine ↔ every WAN router. Each sub-cluster's nodes carry the prefix `campus-0-cluster-{i}-` so a consumer can partition detector state by sub-cluster (separately baselined, separately FDR-controlled) while still combining verdicts at the campus level.
 
 ## NVL72 per-rack node manifest
 
@@ -115,24 +115,9 @@ Tessera adopts this composition pattern and ships a contract smoke test at `test
 - **Bandwidth / latency / congestion modeling** on the fabric — `network_link` edges carry topology only.
 - **Real hardware validation** — synthetic by design.
 
-See [`coordination/PRD.md`](./coordination/PRD.md) § Out-of-scope for the full anti-scope ledger.
-
 ## Methodology
 
-clustersynth is also a worked example of the [Anchor](https://github.com/johnpatrickwarren-oss/anchor) four-role coordination methodology — applied at the smallest viable scale (one author, three rounds). The `coordination/` tree contains:
-
-- `PRD.md` — product requirements with acceptance criteria
-- `specs/Q-R01-SPEC.md` + `Q-R01-SPEC-AUDIT.md` — Architect brief + audit sidecar for round 1 (core generators S0–S3)
-- `specs/Q-R02-SPEC.md` + `Q-R02-SPEC-AUDIT.md` — round 2 (campus shape variant + scale-vs-shape framing)
-- `reviews/REVIEWER-REPORT-R01.md` + `REVIEWER-REPORT-R02.md` — post-implementation T3 audits
-- `MEMORIAL.md` — cross-round discipline accretion ledger (4 R01 + 3 R02 + 3 R03 entries; R03 is a memorial-only round capturing the empirical Tessera integration findings — engine extension PR, Tessera adoption PR, and the explicit correction of R01.M2's closed-vs-open NodeKind claim)
-
-Notable discipline events captured in `MEMORIAL.md`:
-
-- **R01.M1** — NFR line-count budget was incoherent with the spec's own per-rack count, caught at implementation, amended.
-- **R02.M1** — V8 spread-push limit (~64K args) blown at c0 size (87K nodes); spec's idiom-by-precedent missed it; resolved with for-of loops.
-- **R02.M2** — pre-flagged refactor SHA-stability risk did not materialize because the halt condition was stated mechanically (pre/post SHA diff).
-- **R02.M3** — fixture-design layer-coverage discipline: enumerate shape variation vs count variation before defaulting to "bigger."
+clustersynth was built as a worked example of the [Anchor](https://github.com/johnpatrickwarren-oss/anchor) four-role coordination methodology — applied at the smallest viable scale (one author, three rounds: core generators S0–S3, the campus shape variant, and a memorial-only integration round).
 
 ## License
 
