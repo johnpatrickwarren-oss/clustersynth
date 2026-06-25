@@ -1,0 +1,10 @@
+# Single-package repo (not a multi-package workspace). This file exists only to
+# satisfy pnpm 11's build-script approval gate: tsx pulls in esbuild, which has a
+# postinstall build step. Allow it explicitly so `pnpm install` / `pnpm test`
+# run non-interactively.
+onlyBuiltDependencies:
+  - esbuild
+# esbuild's build-approval bookkeeping can't be completed non-interactively in
+# this environment, and pnpm 11 hard-fails `pnpm <script>` on the unapproved
+# build. The esbuild binary is present and functional, so skip the pre-run check.
+verifyDepsBeforeRun: false

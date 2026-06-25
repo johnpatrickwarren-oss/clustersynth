@@ -14,11 +14,13 @@ import type {
   Scale,
   Family,
 } from '../types.js';
-import { buildRack } from './rack-builder.js';
-import { buildPod } from './pod-builder.js';
+import { buildRack, GPU_PER_RACK } from './rack-builder.js';
+import { buildPod, RACKS_PER_POD } from './pod-builder.js';
+import type { RackConfig } from './pod-builder.js';
 import { buildCampus } from './campus-builder.js';
+import { buildNvlinkDomains, enumerateRackIds } from './nvlink-domains.js';
 import { familyOf } from './family.js';
-import { Rng } from './rng.js';
+import { Rng, rngFor } from './rng.js';
 
 export const PODS_PER_SCALE: Record<Exclude<Scale, 'c0'>, number> = {
   s0: 0,
@@ -43,6 +45,10 @@ export function buildClusterCore(
   clusterId: string,
   podCount: number,
   withSpines: boolean,
+  spineCount: number = SPINES_AT_S2_PLUS,
+  racksPerPod: number = RACKS_PER_POD,
+  rackConfig?: RackConfig,
+  rails: number = 0,
 ): ClusterCorePayload {
   const nodes: TopologyNode[] = [];
   const edges: TopologyEdge[] = [];
@@ -52,16 +58,18 @@ export function buildClusterCore(
   const leafIdsByPod: string[][] = [];
   for (let p = 0; p < podCount; p++) {
     const podId = `${clusterId}-pod-${p}`;
-    const pod = buildPod(family, podId);
-    nodes.push(...pod.nodes);
-    edges.push(...pod.edges);
+    const pod = buildPod(family, podId, racksPerPod, rackConfig, rails);
+    // for-of rather than spread: parametric pods can exceed V8's variadic-args
+    // call-stack limit for nodes.push(...big_array). See MEMORIAL R02.M1.
+    for (const n of pod.nodes) nodes.push(n);
+    for (const e of pod.edges) edges.push(e);
     edges.push({ from: clusterId, to: podId, relationship: 'contains' });
     leafIdsByPod.push(pod.leaf_ids);
   }
 
   const spine_ids: string[] = [];
   if (withSpines) {
-    for (let s = 0; s < SPINES_AT_S2_PLUS; s++) {
+    for (let s = 0; s < spineCount; s++) {
       const spineId = `${clusterId}-spine-${s}`;
       spine_ids.push(spineId);
       nodes.push({ id: spineId, service_name: `spine-${s}`, kind: 'spine_switch' });
@@ -115,6 +123,108 @@ export function buildCluster(opts: BuildOpts): TopologySnapshot {
     edges,
     fetched_at_ts: baseTs,
     source_id: `clustersynth_${fam.source_id_segment}_${opts.scale}`,
+    source_version: `clustersynth.0.1.${buildTag}`,
+  };
+}
+
+export interface ShapeOpts {
+  family: Family;
+  pods: number;
+  racksPerPod?: number; // default 10
+  spines?: number; // default 4; 0 → no spine tier (S1-style)
+  seed?: number;
+  fetched_at_ts?: number;
+  // Brownfield heterogeneity (Track 3B). Omit both ⇒ homogeneous, full-population.
+  mix?: Partial<Record<Family, number>>; // family weights, e.g. { gb200: 0.7, gb300: 0.3 }
+  decommissionRate?: number; // fraction of racks with some GPUs decommissioned
+  // Rail-optimized fabric (Track 1A). 0/undefined ⇒ original single-ToR wiring.
+  rails?: number;
+  // NVL576 NVLink domains (Track 1E). Racks per domain (e.g. 8); 0/undefined ⇒ off.
+  nvlinkDomainRacks?: number;
+}
+
+// Build the per-rack overlay (family + live GPU count) from mix/decommission opts.
+// Each rack rolls independently and deterministically from (seed, rackId).
+export function rackConfigFrom(
+  seed: number,
+  baseFamily: Family,
+  mix: Partial<Record<Family, number>> | undefined,
+  decommissionRate: number,
+): RackConfig | undefined {
+  if (!mix && decommissionRate <= 0) return undefined;
+  const families = (Object.keys(mix ?? {}) as Family[]).filter((f) => (mix![f] ?? 0) > 0);
+  const total = families.reduce((s, f) => s + (mix![f] ?? 0), 0);
+  return (rackId: string) => {
+    let family = baseFamily;
+    if (families.length > 0) {
+      const u = rngFor(seed, `family:${rackId}`).float() * total;
+      let acc = 0;
+      for (const f of families) {
+        acc += mix![f] ?? 0;
+        if (u <= acc) {
+          family = f;
+          break;
+        }
+      }
+    }
+    let liveGpus = GPU_PER_RACK;
+    if (decommissionRate > 0 && rngFor(seed, `decom:${rackId}`).float() < decommissionRate) {
+      liveGpus = GPU_PER_RACK - 1 - rngFor(seed, `decom-n:${rackId}`).int(8); // pull 1–8 GPUs
+    }
+    return { family, liveGpus };
+  };
+}
+
+// Parametric escape hatch from the fixed S0–S3 tiers: build a single flat cluster
+// of arbitrary size so the generator can reach 100k+ GPUs (e.g. pods=140 →
+// 100,800 GPU). Reuses buildClusterCore, so referential integrity, determinism,
+// and node/edge ordering match the enum path. source_id encodes the GPU count so
+// distinct shapes get distinct IDs.
+export function buildClusterShaped(opts: ShapeOpts): TopologySnapshot {
+  const fam = familyOf(opts.family);
+  const baseTs = opts.fetched_at_ts ?? 1_700_000_000;
+  const rng = new Rng(opts.seed ?? 0);
+  const racksPerPod = opts.racksPerPod ?? RACKS_PER_POD;
+  const spineCount = opts.spines ?? SPINES_AT_S2_PLUS;
+  const rackConfig = rackConfigFrom(
+    opts.seed ?? 0,
+    opts.family,
+    opts.mix,
+    opts.decommissionRate ?? 0,
+  );
+
+  const core = buildClusterCore(
+    opts.family,
+    'cluster-0',
+    opts.pods,
+    spineCount > 0,
+    spineCount,
+    racksPerPod,
+    rackConfig,
+    opts.rails ?? 0,
+  );
+
+  const nodes: TopologyNode[] = [];
+  const edges: TopologyEdge[] = [];
+  for (const n of core.nodes) nodes.push(n);
+  for (const e of core.edges) edges.push(e);
+
+  // NVL576 NVLink domains (Track 1E), appended after the core (byte-stable default off)
+  if (opts.nvlinkDomainRacks && opts.nvlinkDomainRacks > 0) {
+    const rackIds = enumerateRackIds('cluster-0', opts.pods, racksPerPod);
+    const dom = buildNvlinkDomains(rackIds, opts.nvlinkDomainRacks);
+    for (const n of dom.nodes) nodes.push(n);
+    for (const e of dom.edges) edges.push(e);
+  }
+
+  // nominal capacity label; actual count may be lower with decommissioning
+  const gpuCount = opts.pods * racksPerPod * GPU_PER_RACK;
+  const buildTag = rng.nextU32().toString(16).padStart(8, '0');
+  return {
+    nodes,
+    edges,
+    fetched_at_ts: baseTs,
+    source_id: `clustersynth_${fam.source_id_segment}_custom_g${gpuCount}`,
     source_version: `clustersynth.0.1.${buildTag}`,
   };
 }

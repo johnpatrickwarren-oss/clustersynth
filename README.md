@@ -13,7 +13,24 @@ pnpm fixtures                          # regenerate fixtures/ (S0–S2; idempote
 pnpm cli gb200 s0                       # emit JSON to stdout
 pnpm cli gb300 s3 --out big.json        # 72,000-GPU GB300 cluster (~0.5s)
 pnpm cli gb200 c0 --out campus.json     # federated campus: 4 × S2 sub-clusters (~0.3s)
+pnpm cli gb200 custom --gpus 100000 --out 100k.json   # parametric: ≥100k GPUs (~0.9s)
 ```
+
+### Parametric scale (`custom`)
+
+Beyond the fixed S0–S3 tiers, `custom` builds a flat cluster of arbitrary size —
+the path to 100k+ GPUs:
+
+```bash
+pnpm cli gb200 custom --gpus 100000                    # pods = ceil(N / (racksPerPod·72))
+pnpm cli gb200 custom --pods 139                        # 139 pods → 100,080 GPU
+pnpm cli gb200 custom --pods 200 --racks-per-pod 8 --spines 16
+```
+
+Same referential-integrity and determinism guarantees as the enum tiers. Output
+is **streamed** to `--out` (byte-identical to the pretty-printed fixtures) so a
+100k snapshot serializes at ~430 MB peak RSS instead of buffering the whole
+~270 MB JSON string. Programmatic entry point: `buildClusterShaped({ family, pods, racksPerPod?, spines?, seed? })`.
 
 ## Scale tiers + shape variant
 
@@ -107,13 +124,70 @@ Non-cluster engine consumers (DeploySignal, etc.) see zero schema-surface change
 
 Tessera adopts this composition pattern and ships a contract smoke test at `test/q-clustersynth-smoke.test.ts` ([tessera PR #4](https://github.com/johnpatrickwarren-oss/tessera/pull/4)) covering envelope shape, referential integrity, cluster-kind narrowing, and the C0 federation partition invariant.
 
-## What's NOT in scope
+## Harness mode — `scenario` (clustersynth as Tessera's test bed)
 
-- **Per-shard counter time-series** — Tessera's `test/_substrate/synthetic-counter-generator.ts` owns that layer. clustersynth gives the rack; tessera gives the per-shard traffic.
-- **Failure injection** (drift / common-mode / event-conditional) — Tessera's `tools/demo-scenario.ts`. clustersynth gives the clean-baseline substrate they inject into.
-- **NVL576 multi-rack NVLink domains** — deferred to a future round (no inter-rack `nvlink_peer` edges).
-- **Bandwidth / latency / congestion modeling** on the fabric — `network_link` edges carry topology only.
+Beyond static topology, clustersynth is the **adversarial data harness** for
+Tessera: it generates per-shard counter time-series with labeled, topology-anchored
+faults. A single config emits a coherent bundle Tessera's tests consume as the
+system under test:
+
+```bash
+pnpm cli scenario scenario.json --out-dir out/
+# out/topology.json   enriched topology (base + shared-infra cdu/power_feed)
+# out/factors.json    ground-truth common-mode processes f_k(t) + shard membership
+# out/alloc.json      job / tenant allocation
+# out/labels.json     fault ground-truth (shard/cdu/pod, onset, type, blast radius)
+# out/counters.ndjson per-shard counter time-series (streamed; flat memory)
+```
+
+```json
+{ "family": "gb200", "pods": 10, "seed": 1,
+  "rails": 8,
+  "mix": { "gb200": 0.8, "gb300": 0.2 },
+  "decommissionRate": 0.05,
+  "window": { "steps": 288, "dt_s": 15 },
+  "nonstationarity": ["thermal", "diurnal", "regime"],
+  "faults": { "rate": 0.01, "sharedFaults": 3 } }
+```
+
+Optional realism overlays (all seed-deterministic): `rails` (rail-optimized fabric
+— R rail-leaf switches per pod, NIC i → rail i%R), `nvlinkDomainRacks` (NVL576
+multi-rack NVLink domains), `mix` (mixed GB200/GB300 generations per rack),
+`decommissionRate` (partially-populated racks), `churn` (fleet evolution log). The
+bundle also emits `health.json` (per-node status/firmware/thermal, biased in
+faulted cooling domains), `fabric.json` (per-edge link/gbps/latency), and — when
+`churn` is set — `churn.json` (timestamped fail/replace/drain/firmware events).
+
+### Inspection & evolution
+
+```bash
+pnpm cli validate out/topology.json --health out/health.json --alloc out/alloc.json
+pnpm cli stats out/topology.json                     # counts by kind, degree, fabric tier
+pnpm cli diff a.json b.json                          # node / edge / kind deltas
+pnpm cli evolve out/topology.json --horizon-days 14 --at 1700200000  # churn log + status@T
+```
+
+The generative model is a linear factor model with **heterogeneous per-shard
+loadings** over shared factors (cooling/power/fabric/job), **within-window
+nonstationarity**, and a **minority of labeled faults** (mean-shift / drift /
+variance-collapse / detachment) placed at the GPU / cooling-zone / pod level. The
+design rationale and the validity contract live in [`REALISM-PLAN.md`](REALISM-PLAN.md);
+the load-bearing invariant is that clustersynth takes **no dependency on Tessera
+detection code** — data flows one way.
+
+The key realism guarantee (`test/q-r04-nullcalibration.test.ts`): on a no-fault,
+nonstationary null, a stationarity-assuming per-shard test over-rejects (the
+ADR-0011 trap) while a factor-aware test controls the false-positive rate (ADR-0012).
+
+## What's NOT (yet) in scope
+
+- **Congestion/contention modeling** on top of the fabric attributes — link
+  capacities are present, but flow-level congestion is not simulated.
 - **Real hardware validation** — synthetic by design.
+
+> Note: per-shard counters and failure injection were previously delegated to
+> Tessera; as of the harness work they are owned here (Track 4). See
+> `REALISM-PLAN.md` § scope decision.
 
 ## Methodology
 

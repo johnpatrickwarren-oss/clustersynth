@@ -20,7 +20,13 @@ export type NodeKind =
   | 'pod'
   | 'cluster'
   | 'campus'
-  | 'site_wan_router';
+  | 'site_wan_router'
+  // Shared infrastructure (Track 1B) — present only in harness/scenario topology,
+  // never in the S0–S3/C0 enum fixtures (keeps their byte-SHAs stable). These are
+  // the shared resources that common-mode factors attach to.
+  | 'cdu' // cooling distribution unit — one loop feeds many racks
+  | 'power_feed' // power whip / PDU — one feed serves a row of racks
+  | 'nvlink_domain'; // NVL576 multi-rack NVLink domain (groups ~8 NVL72 racks)
 
 export type EdgeRelationship =
   | 'contains'
@@ -29,7 +35,11 @@ export type EdgeRelationship =
   | 'pcie_peer'
   | 'power_supply'
   | 'cooling'
-  | 'network_link';
+  | 'network_link'
+  // Shared-infra membership edges (Track 1B): rack → shared resource. The set of
+  // racks pointing at one resource is its blast radius / common-mode domain.
+  | 'cooled_by'
+  | 'powered_by';
 
 export interface TopologyNode {
   id: string;

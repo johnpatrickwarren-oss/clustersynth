@@ -30,7 +30,14 @@ export interface RackPayload {
   nic_ids: string[];
 }
 
-export function buildRack(family: Family, rackId: string): RackPayload {
+// liveGpus < 72 models a partially-populated / partially-decommissioned rack:
+// the trailing GPU slots (and their 1:1 NICs) are omitted; trays/CPUs/switches
+// remain (the board is present, the GPUs pulled). Default 72 ⇒ byte-unchanged.
+export function buildRack(
+  family: Family,
+  rackId: string,
+  liveGpus: number = GPU_PER_RACK,
+): RackPayload {
   const fam = familyOf(family);
   const nodes: TopologyNode[] = [];
   const edges: TopologyEdge[] = [];
@@ -77,6 +84,8 @@ export function buildRack(family: Family, rackId: string): RackPayload {
     }
 
     for (let g = 0; g < GPU_PER_TRAY; g++) {
+      // skip decommissioned trailing GPU slots (and their NICs)
+      if (t * GPU_PER_TRAY + g >= liveGpus) continue;
       const gpuId = `${trayId}-gpu-${g}`;
       shard_ids.push(gpuId);
       nodes.push({ id: gpuId, service_name: `${fam.gpu_prefix}-${t}-${g}`, kind: 'gpu_shard' });
