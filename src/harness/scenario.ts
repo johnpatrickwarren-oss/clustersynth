@@ -206,6 +206,19 @@ function backpressureWriter(out: Writable): (chunk: string) => Promise<void> {
 
 const FLUSH = 1 << 20; // ~1 MB
 
+// Optional counter subset via CS_COUNTERS (comma-separated counter names). Lets a
+// consumer generate a long-duration, high-cadence run for a single DCGM counter
+// (e.g. CS_COUNTERS=gpu_temp_c) without paying the 5x volume of the full set.
+// Applied to both the emitted counter rows and the factors sidecar's counter specs.
+const SELECTED_COUNTERS = (() => {
+  const env = process.env.CS_COUNTERS;
+  if (!env) return COUNTERS;
+  const names = new Set(env.split(',').map((x) => x.trim()).filter(Boolean));
+  const sub = COUNTERS.filter((c) => names.has(c.name));
+  if (sub.length === 0) throw new Error(`CS_COUNTERS matched no known counter: ${env}`);
+  return sub;
+})();
+
 // Stream per-shard counter rows as NDJSON. Memory is flat in T: the shared factor
 // arrays are precomputed once (O(T·F)); each shard-counter is generated tick by
 // tick via counterTicks (O(1) state) and never materialized as an array. Optional
@@ -219,7 +232,7 @@ export async function streamCounters(
   const dtOut = downsampleTo ?? s.dt_s;
   const step = Math.max(1, Math.round(dtOut / s.dt_s));
   for (const gpu of s.gpuIds) {
-    for (const counter of COUNTERS) {
+    for (const counter of SELECTED_COUNTERS) {
       let buf =
         `{"shard":${JSON.stringify(gpu)},"counter":${JSON.stringify(counter.name)},` +
         `"t0":${s.baseTs},"dt":${dtOut},"v":[`;
@@ -242,16 +255,33 @@ export async function streamCounters(
   }
 }
 
-// Ground-truth factor sidecar: the shared common-mode processes plus each shard's
-// factor membership. A factor-aware detector regresses counters on these.
+// Ground-truth factor sidecar — META only (T, dt_s, counter specs, per-shard factor
+// membership). The heavy per-factor series live in the streamed factors.ndjson sidecar
+// so neither generation (JSON.stringify) nor a consumer (readFileSync) ever builds a
+// multi-GB string at scale. A factor-aware detector regresses counters on these.
 function factorsDoc(s: Scenario) {
-  const factors: Record<string, { kind: string; series: number[] }> = {};
-  for (const [id, series] of s.graph.series) {
-    factors[id] = { kind: s.graph.kindOf.get(id)!, series: series.map(round3) };
-  }
   const membership: Record<string, ReturnType<typeof shardFactors>> = {};
   for (const gpu of s.gpuIds) membership[gpu] = shardFactors(gpu, s.ctx);
-  return { T: s.T, dt_s: s.dt_s, counters: COUNTERS, factors, membership };
+  return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, membership };
+}
+
+// Stream the ground-truth factor series as NDJSON: one row per factor instance
+// {"id","kind","v":[...]}. Flat memory in T (each series is already materialised in
+// s.graph.series, but we serialise + flush incrementally rather than buffering the
+// whole document). Mirrors streamCounters so a consumer streams both the same way.
+async function streamFactors(out: Writable, s: Scenario): Promise<void> {
+  const w = backpressureWriter(out);
+  for (const [id, series] of s.graph.series) {
+    let buf = `{"id":${JSON.stringify(id)},"kind":${JSON.stringify(s.graph.kindOf.get(id)!)},"v":[`;
+    let first = true;
+    for (const val of series) {
+      buf += (first ? '' : ',') + round3(val);
+      first = false;
+      if (buf.length >= FLUSH) { await w(buf); buf = ''; }
+    }
+    buf += ']}\n';
+    await w(buf);
+  }
 }
 
 async function writeJson(path: string, obj: unknown): Promise<void> {
@@ -279,6 +309,10 @@ export async function writeScenario(s: Scenario, outDir: string): Promise<string
   const factorsPath = join(outDir, 'factors.json');
   await writeJson(factorsPath, factorsDoc(s));
   paths.push(factorsPath);
+
+  const factorsNdjsonPath = join(outDir, 'factors.ndjson');
+  await writeStreamFile(factorsNdjsonPath, (out) => streamFactors(out, s));
+  paths.push(factorsNdjsonPath);
 
   const allocPath = join(outDir, 'alloc.json');
   await writeJson(allocPath, {

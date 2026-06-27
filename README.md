@@ -134,11 +134,23 @@ system under test:
 ```bash
 pnpm cli scenario scenario.json --out-dir out/
 # out/topology.json   enriched topology (base + shared-infra cdu/power_feed)
-# out/factors.json    ground-truth common-mode processes f_k(t) + shard membership
+# out/factors.json    META: T, dt_s, counter specs, per-shard factor membership
+# out/factors.ndjson  ground-truth common-mode series f_k(t), one row per factor (streamed)
 # out/alloc.json      job / tenant allocation
 # out/labels.json     fault ground-truth (shard/cdu/pod, onset, type, blast radius)
 # out/counters.ndjson per-shard counter time-series (streamed; flat memory)
+
+# CS_COUNTERS restricts generation to a counter subset (5x less volume per dropped
+# counter) — the path to a long-duration, high-cadence run for one DCGM counter:
+CS_COUNTERS=gpu_temp_c pnpm cli scenario scenario.json --out-dir out/
 ```
+
+> **Factor series moved to `factors.ndjson` (streamed).** `factors.json` is now
+> META-only (`T`, `dt_s`, counter specs, membership); the heavy per-factor `f_k(t)`
+> series stream to `factors.ndjson` (one `{id,kind,v}` row each). This is what lets
+> both generation and a consumer handle a long window at scale without ever building
+> a multi-GB JSON string (V8's ~512 MB max-string cap). A consumer streams
+> `factors.ndjson` the same way it streams `counters.ndjson`.
 
 ```json
 { "family": "gb200", "pods": 10, "seed": 1,
@@ -185,6 +197,18 @@ coarser cadence from a fine generation (coarse long baseline + short 1 Hz window
 The key realism guarantee (`test/q-r04-nullcalibration.test.ts`): on a no-fault,
 nonstationary null, a stationarity-assuming per-shard test over-rejects (the
 ADR-0011 trap) while a factor-aware test controls the false-positive rate (ADR-0012).
+
+### Duration ≥ 2 months — do not test on snapshots
+
+Tessera needs a baseline curated over **~2 months**, and the nonstationarity here is
+keyed to wall-clock time (diurnal 86,400 s, weekly, regime, thermal ramp). A short
+window contains none of those cycles, so a snapshot run measures an unrepresentative
+slice — **not** whether detection works. **Generate ≥ 60 days** (5,184,000 ticks at
+`dt_s:1`; or fewer ticks at a coarser `dt_s`, since a coarse run ≈ a downsampled fine
+run). Restrict counters (`CS_COUNTERS`) when 1 Hz × 2 months is too large for the full
+set. The scale-and-duration test methodology — the 2-month rule, the rack-ramp, and a
+resource model for picking max racks given (cores, RAM, disk) — lives consumer-side in
+tessera: `docs/METHODOLOGY-scale-and-duration-testing.md` + `tools/clustersynth-ramp.sh`.
 
 ## What's NOT (yet) in scope
 
