@@ -219,6 +219,16 @@ const SELECTED_COUNTERS = (() => {
   return sub;
 })();
 
+// CS_SHARD_RANGE="start:count" — restrict counter emission to gpuIds[start, start+count).
+// Used to split a tier's generation across processes/cores. Returns the full list if unset.
+function shardRange<T>(ids: ReadonlyArray<T>): ReadonlyArray<T> {
+  const env = process.env.CS_SHARD_RANGE;
+  if (!env) return ids;
+  const [s, c] = env.split(':').map((x) => parseInt(x, 10));
+  if (!Number.isFinite(s) || !Number.isFinite(c)) throw new Error(`bad CS_SHARD_RANGE: ${env} (want start:count)`);
+  return ids.slice(s, s + c);
+}
+
 // Stream per-shard counter rows as NDJSON. Memory is flat in T: the shared factor
 // arrays are precomputed once (O(T·F)); each shard-counter is generated tick by
 // tick via counterTicks (O(1) state) and never materialized as an array. Optional
@@ -231,7 +241,11 @@ export async function streamCounters(
   const w = backpressureWriter(out);
   const dtOut = downsampleTo ?? s.dt_s;
   const step = Math.max(1, Math.round(dtOut / s.dt_s));
-  for (const gpu of s.gpuIds) {
+  // Optional CS_SHARD_RANGE="start:count" emits only gpuIds[start, start+count) — lets a
+  // tier's generation be split across processes/cores (counterTicks is deterministic per
+  // (seed,gpu,counter), so concatenated ranges are byte-identical to a single-process run).
+  const gpus = shardRange(s.gpuIds);
+  for (const gpu of gpus) {
     for (const counter of SELECTED_COUNTERS) {
       let buf =
         `{"shard":${JSON.stringify(gpu)},"counter":${JSON.stringify(counter.name)},` +
@@ -298,10 +312,18 @@ async function writeStreamFile(path: string, fn: (out: Writable) => Promise<void
   await once(stream, 'finish');
 }
 
-// Emit the full bundle to outDir.
+// Emit the full bundle to outDir. CS_COUNTERS_ONLY=1 writes ONLY counters.ndjson (skips
+// topology/factors/alloc/labels/health/fabric) — for range-split generation where one
+// process writes the shared sidecars and the rest contribute counter shards.
 export async function writeScenario(s: Scenario, outDir: string): Promise<string[]> {
   mkdirSync(outDir, { recursive: true });
   const paths: string[] = [];
+  if (process.env.CS_COUNTERS_ONLY === '1') {
+    const countersOnly = join(outDir, 'counters.ndjson');
+    await writeStreamFile(countersOnly, (out) => streamCounters(out, s, s.config.downsampleTo));
+    paths.push(countersOnly);
+    return paths;
+  }
   const topoPath = join(outDir, 'topology.json');
   await writeStreamFile(topoPath, (out) => writeSnapshot(out, s.topology));
   paths.push(topoPath);

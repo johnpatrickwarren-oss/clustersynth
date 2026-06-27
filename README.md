@@ -143,6 +143,15 @@ pnpm cli scenario scenario.json --out-dir out/
 # CS_COUNTERS restricts generation to a counter subset (5x less volume per dropped
 # counter) — the path to a long-duration, high-cadence run for one DCGM counter:
 CS_COUNTERS=gpu_temp_c pnpm cli scenario scenario.json --out-dir out/
+
+# CS_SHARD_RANGE="start:count" emits only gpuIds[start, start+count) — split a tier's
+# (single-threaded) generation across cores. counterTicks is deterministic per
+# (seed,gpu,counter), so concatenated ranges are byte-identical to a single-process run.
+# Pair with CS_COUNTERS_ONLY=1 (emit ONLY counters.ndjson) on all but one range process,
+# so one process writes the shared sidecars and the rest contribute counter shards:
+CS_SHARD_RANGE="0:36"  pnpm cli scenario cfg.json --out-dir out/         # sidecars + shards 0..35
+CS_SHARD_RANGE="36:36" CS_COUNTERS_ONLY=1 pnpm cli scenario cfg.json --out-dir out.p1/  # shards 36..71
+cat out.p1/counters.ndjson >> out/counters.ndjson                        # then concatenate
 ```
 
 > **Factor series moved to `factors.ndjson` (streamed).** `factors.json` is now
