@@ -21,8 +21,8 @@ function mean(x: number[]): number {
   return s / x.length;
 }
 
-// A standard per-shard "did the level change?" test that ASSUMES stationarity:
-// compare the two window halves, scaling by the full-sample sd. Returns |z|.
+// A standard per-shard "did the level change?" test that ASSUMES stationarity
+// AND iid samples: compare the two window halves, scaling by the full-sample sd.
 function twoHalfZ(y: number[]): number {
   const h = Math.floor(y.length / 2);
   const m1 = mean(y.slice(0, h));
@@ -32,6 +32,34 @@ function twoHalfZ(y: number[]): number {
   for (const v of y) varSum += (v - mu) * (v - mu);
   const sd = Math.sqrt(varSum / (y.length - 1));
   const se = sd * Math.sqrt(2 / h);
+  return Math.abs((m2 - m1) / (se || 1e-12));
+}
+
+function lag1(y: number[]): number {
+  const m = mean(y);
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < y.length; i++) {
+    den += (y[i]! - m) * (y[i]! - m);
+    if (i > 0) num += (y[i]! - m) * (y[i - 1]! - m);
+  }
+  return den > 0 ? num / den : 0;
+}
+
+// Autocorrelation-robust two-half test: at realistic cadence the residual is
+// SMOOTH (OU), so an iid test over-rejects. A proper detector inflates the
+// standard error by the AR(1) effective-sample-size factor √((1+φ)/(1−φ)).
+function twoHalfZAcCorrected(y: number[]): number {
+  const h = Math.floor(y.length / 2);
+  const m1 = mean(y.slice(0, h));
+  const m2 = mean(y.slice(h));
+  const mu = mean(y);
+  let varSum = 0;
+  for (const v of y) varSum += (v - mu) * (v - mu);
+  const sd = Math.sqrt(varSum / (y.length - 1));
+  const phi = Math.max(0, Math.min(0.98, lag1(y)));
+  const inflation = Math.sqrt((1 + phi) / (1 - phi));
+  const se = sd * Math.sqrt(2 / h) * inflation;
   return Math.abs((m2 - m1) / (se || 1e-12));
 }
 
@@ -95,7 +123,8 @@ function fpr(scenario: ReturnType<typeof buildScenario>, counter: string, aware:
       for (const fid of [sf.cool, sf.power, sf.fabric, sf.job]) {
         if (fid && scenario.graph.series.has(fid)) cols.push(scenario.graph.series.get(fid)!);
       }
-      stat = twoHalfZ(olsResiduals(y, cols));
+      // remove common mode, then account for the residual's temporal correlation
+      stat = twoHalfZAcCorrected(olsResiduals(y, cols));
     } else {
       stat = twoHalfZ(y);
     }

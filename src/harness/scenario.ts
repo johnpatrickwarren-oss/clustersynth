@@ -25,7 +25,7 @@ import { allocateJobs } from './allocation.js';
 import type { Allocation } from './allocation.js';
 import {
   buildFactorGraph,
-  realizeShard,
+  counterTicks,
   shardFactors,
   COUNTERS,
 } from './factor-model.js';
@@ -50,6 +50,9 @@ export interface ScenarioConfig {
   nvlinkDomainRacks?: number;
   churn?: { horizonDays?: number; failRate?: number };
   window?: { steps?: number; dt_s?: number };
+  // emit counters at this coarser interval (s) — generate fine, sample coarse.
+  // Must be a multiple of window.dt_s. Use for a coarse long baseline.
+  downsampleTo?: number;
   nonstationarity?: Partial<NonstationarityModes> | Array<keyof NonstationarityModes>;
   infra?: SharedInfraOpts;
   faults?:
@@ -87,10 +90,17 @@ function normalizeModes(
     return {
       thermal: m.includes('thermal'),
       diurnal: m.includes('diurnal'),
+      weekly: m.includes('weekly'),
       regime: m.includes('regime'),
     };
   }
-  return { thermal: m?.thermal ?? true, diurnal: m?.diurnal ?? true, regime: m?.regime ?? true };
+  // weekly defaults off (kept out of the legacy default mode set)
+  return {
+    thermal: m?.thermal ?? true,
+    diurnal: m?.diurnal ?? true,
+    weekly: m?.weekly ?? false,
+    regime: m?.regime ?? true,
+  };
 }
 
 export function buildScenario(config: ScenarioConfig): Scenario {
@@ -134,19 +144,26 @@ export function buildScenario(config: ScenarioConfig): Scenario {
     rails > 0
       ? podIds.flatMap((p) => Array.from({ length: rails }, (_, k) => `${p}-rail-${k}`))
       : podIds;
-  const graph = buildFactorGraph(seed, T, modes, {
-    cdus: [...infra.cduMembers.keys()],
-    feeds: [...infra.feedMembers.keys()],
-    pods: fabricIds,
-    jobs: alloc.jobs.map((j) => j.job_id),
-  });
+  const graph = buildFactorGraph(
+    seed,
+    T,
+    modes,
+    {
+      cdus: [...infra.cduMembers.keys()],
+      feeds: [...infra.feedMembers.keys()],
+      pods: fabricIds,
+      jobs: alloc.jobs.map((j) => j.job_id),
+    },
+    dt_s,
+    baseTs,
+  );
 
   let labels: FaultLabel[] = [];
   let applier: FaultApplier = NO_FAULTS;
   if (config.faults !== false) {
     const f = generateFaults(
       { gpuIds, cduMembers: infra.cduMembers, podIds },
-      { seed, T, ...(config.faults || {}) },
+      { seed, T, dt_s, baseTs, ...(config.faults || {}) },
     );
     labels = f.labels;
     applier = f.applier;
@@ -187,15 +204,40 @@ function backpressureWriter(out: Writable): (chunk: string) => Promise<void> {
     out.write(chunk) ? Promise.resolve() : new Promise((res) => out.once('drain', res));
 }
 
-// Stream per-shard counter rows as NDJSON. Memory stays flat: one shard realized
-// at a time. Scales to 100k × T without buffering the run.
-export async function streamCounters(out: Writable, s: Scenario): Promise<void> {
+const FLUSH = 1 << 20; // ~1 MB
+
+// Stream per-shard counter rows as NDJSON. Memory is flat in T: the shared factor
+// arrays are precomputed once (O(T·F)); each shard-counter is generated tick by
+// tick via counterTicks (O(1) state) and never materialized as an array. Optional
+// downsampleTo emits every (downsampleTo / dt_s)-th tick at the coarser cadence.
+export async function streamCounters(
+  out: Writable,
+  s: Scenario,
+  downsampleTo?: number,
+): Promise<void> {
   const w = backpressureWriter(out);
+  const dtOut = downsampleTo ?? s.dt_s;
+  const step = Math.max(1, Math.round(dtOut / s.dt_s));
   for (const gpu of s.gpuIds) {
-    const series = realizeShard(s.seed, gpu, s.ctx, s.graph, s.applier);
     for (const counter of COUNTERS) {
-      const v = series[counter.name]!.map(round3);
-      await w(JSON.stringify({ shard: gpu, counter: counter.name, t0: s.baseTs, dt: s.dt_s, v }) + '\n');
+      let buf =
+        `{"shard":${JSON.stringify(gpu)},"counter":${JSON.stringify(counter.name)},` +
+        `"t0":${s.baseTs},"dt":${dtOut},"v":[`;
+      let i = 0;
+      let first = true;
+      for (const val of counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier)) {
+        if (i % step === 0) {
+          buf += (first ? '' : ',') + round3(val);
+          first = false;
+          if (buf.length >= FLUSH) {
+            await w(buf);
+            buf = '';
+          }
+        }
+        i++;
+      }
+      buf += ']}\n';
+      await w(buf);
     }
   }
 }
@@ -266,7 +308,7 @@ export async function writeScenario(s: Scenario, outDir: string): Promise<string
   }
 
   const countersPath = join(outDir, 'counters.ndjson');
-  await writeStreamFile(countersPath, (out) => streamCounters(out, s));
+  await writeStreamFile(countersPath, (out) => streamCounters(out, s, s.config.downsampleTo));
   paths.push(countersPath);
 
   return paths;

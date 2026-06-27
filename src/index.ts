@@ -49,8 +49,10 @@ export { allocateJobs } from './harness/allocation.js';
 export type { Job, Allocation, AllocationOpts } from './harness/allocation.js';
 export {
   COUNTERS,
+  FACTOR_TAU,
   buildFactorGraph,
   factorSeries,
+  counterTicks,
   realizeShard,
   shardFactors,
   lambdaOf,

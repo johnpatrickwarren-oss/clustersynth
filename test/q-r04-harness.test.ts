@@ -124,10 +124,13 @@ test('4D/4E faults are a minority, typed, placed on topology, with blast radius'
   const gpuIds = topo.nodes.filter((n) => n.kind === 'gpu_shard').map((n) => n.id);
   const podIds = topo.nodes.filter((n) => n.kind === 'pod').map((n) => n.id);
   const infra = buildSharedInfra(rackIds);
+  const dt_s = 15;
+  const baseTs = 1_700_000_000;
   const { labels } = generateFaults(
     { gpuIds, cduMembers: infra.cduMembers, podIds },
-    { seed: 1, T: 200, rate: 0.01, sharedFaults: 2 },
+    { seed: 1, T: 200, dt_s, baseTs, rate: 0.01, sharedFaults: 2 },
   );
+  const windowEnd = baseTs + 199 * dt_s;
 
   const gpuAffected = new Set<string>();
   for (const l of labels) if (l.level === 'gpu') l.affected_shards.forEach((s) => gpuAffected.add(s));
@@ -138,7 +141,7 @@ test('4D/4E faults are a minority, typed, placed on topology, with blast radius'
 
   for (const l of labels) {
     a.ok(['mean_shift', 'drift', 'variance_collapse', 'detachment'].includes(l.type));
-    a.ok(l.t_onset < l.t_offset && l.t_offset <= 200);
+    a.ok(l.t_onset_s < l.t_offset_s && l.t_offset_s <= windowEnd, 'fault interval within window (wall-clock)');
     a.ok(l.affected_shards.length >= 1);
     if (l.level === 'cdu') {
       // blast radius == exactly the cdu's shard membership
@@ -160,9 +163,9 @@ test('4E shared fault blast radius is heterogeneous (lambda-scaled, not uniform)
   });
   const cduFault = s.labels.find((l) => l.level === 'cdu');
   a.ok(cduFault, 'expected a cdu fault');
-  // measure per-shard perturbation magnitude on gpu_temp_c at a faulted timestep
-  const t = Math.floor((cduFault!.t_onset + cduFault!.t_offset) / 2);
-  const deltas = cduFault!.affected_shards.slice(0, 200).map((g) => s.applier.meanDelta(g, 'gpu_temp_c', t));
+  // measure per-shard perturbation on gpu_temp_c at a faulted wall-clock instant
+  const tSec = (cduFault!.t_onset_s + cduFault!.t_offset_s) / 2;
+  const deltas = cduFault!.affected_shards.slice(0, 200).map((g) => s.applier.meanDelta(g, 'gpu_temp_c', tSec));
   const mu = deltas.reduce((x, y) => x + y, 0) / deltas.length;
   const sd = Math.sqrt(deltas.reduce((x, y) => x + (y - mu) * (y - mu), 0) / deltas.length);
   a.ok(Math.abs(mu) > 0, 'shared fault perturbs the domain');

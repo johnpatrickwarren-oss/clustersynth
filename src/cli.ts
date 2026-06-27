@@ -126,8 +126,10 @@ function customOpts(args: Args): ShapeOpts {
 async function scenarioMain(rest: string[]): Promise<void> {
   let cfgPath: string | undefined;
   let outDir = 'scenario-out';
+  let downsampleTo: number | undefined;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--out-dir') outDir = rest[++i]!;
+    else if (rest[i] === '--downsample-to') downsampleTo = Number(rest[++i]);
     else if (!cfgPath) cfgPath = rest[i];
     else {
       process.stderr.write(`Unknown scenario argument: ${rest[i]}\n`);
@@ -135,10 +137,13 @@ async function scenarioMain(rest: string[]): Promise<void> {
     }
   }
   if (!cfgPath) {
-    process.stderr.write('Usage: clustersynth scenario <config.json> [--out-dir DIR]\n');
+    process.stderr.write(
+      'Usage: clustersynth scenario <config.json> [--out-dir DIR] [--downsample-to SECONDS]\n',
+    );
     process.exit(2);
   }
   const config = JSON.parse(readFileSync(cfgPath, 'utf8')) as ScenarioConfig;
+  if (downsampleTo !== undefined) config.downsampleTo = downsampleTo;
   const s = buildScenario(config);
   const paths = await writeScenario(s, outDir);
   process.stderr.write(

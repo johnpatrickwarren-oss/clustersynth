@@ -26,6 +26,8 @@ const COUNTER_BY_NAME = new Map(COUNTERS.map((c) => [c.name, c]));
 export interface FaultOpts {
   seed: number;
   T: number;
+  dt_s: number; // sampling interval (s) — fault timing is wall-clock, not ticks
+  baseTs: number; // window start (absolute wall-clock seconds)
   rate?: number; // fraction of shards with individual GPU faults (default 0.01)
   sharedFaults?: number; // count of cdu/pod common-mode events (default 2 if enabled)
   levels?: FaultLevel[]; // default all
@@ -59,7 +61,8 @@ export interface FaultTopo {
 }
 
 export function generateFaults(topo: FaultTopo, opts: FaultOpts): FaultSet {
-  const { seed, T } = opts;
+  const { seed, T, dt_s, baseTs } = opts;
+  const windowDur = Math.max((T - 1) * dt_s, dt_s);
   const rate = opts.rate ?? 0.01;
   const levels = opts.levels ?? ALL_LEVELS;
   const types = opts.types ?? ALL_TYPES;
@@ -89,8 +92,9 @@ export function generateFaults(topo: FaultTopo, opts: FaultOpts): FaultSet {
     affected: string[],
     type: FaultType,
   ) => {
-    const onset = Math.floor(rng.range(0.1, 0.5) * T);
-    const offset = Math.min(T, onset + Math.floor(rng.range(0.2, 0.5) * T) + 1);
+    // onset/offset in absolute wall-clock seconds (cadence-independent)
+    const onset = baseTs + rng.range(0.1, 0.5) * windowDur;
+    const offset = Math.min(baseTs + windowDur, onset + rng.range(0.2, 0.5) * windowDur + dt_s);
     // shared faults hit all counters; gpu faults often target one counter
     const counter = level === 'gpu' && rng.float() < 0.7 ? rng.pick(COUNTERS).name : null;
     let magnitude: number;
@@ -107,8 +111,10 @@ export function generateFaults(topo: FaultTopo, opts: FaultOpts): FaultSet {
       target,
       counter,
       type,
-      t_onset: onset,
-      t_offset: offset,
+      t_onset_s: onset,
+      t_offset_s: offset,
+      t_onset: Math.round((onset - baseTs) / dt_s),
+      t_offset: Math.round((offset - baseTs) / dt_s),
       magnitude,
       detach_factor,
       affected_shards: affected,
@@ -161,43 +167,44 @@ export function buildApplier(seed: number, labels: FaultLabel[]): FaultApplier {
       (byShard.get(s) ?? byShard.set(s, []).get(s)!).push(l);
     }
   }
-  const active = (l: FaultLabel, t: number) => t >= l.t_onset && t < l.t_offset;
+  const active = (l: FaultLabel, tSec: number) => tSec >= l.t_onset_s && tSec < l.t_offset_s;
   const hits = (l: FaultLabel, counter: string) => l.counter === null || l.counter === counter;
 
   return {
-    meanDelta(shardId, counter, t) {
+    meanDelta(shardId, counter, tSec) {
       const ls = byShard.get(shardId);
       if (!ls) return 0;
       const spec = COUNTER_BY_NAME.get(counter)!;
       let d = 0;
       for (const l of ls) {
-        if (!active(l, t) || !hits(l, counter)) continue;
+        if (!active(l, tSec) || !hits(l, counter)) continue;
         if (l.type === 'mean_shift') {
           d += l.level === 'gpu' ? l.magnitude * spec.noiseSd : sharedDelta(seed, shardId, spec, l);
         } else if (l.type === 'drift') {
-          const frac = (t - l.t_onset) / Math.max(1, l.t_offset - l.t_onset);
+          // ramp 0→full over the wall-clock fault interval (slope per second)
+          const frac = (tSec - l.t_onset_s) / Math.max(1e-9, l.t_offset_s - l.t_onset_s);
           const base = l.level === 'gpu' ? l.magnitude * spec.noiseSd : sharedDelta(seed, shardId, spec, l);
           d += base * frac;
         }
       }
       return d;
     },
-    noiseScale(shardId, counter, t) {
+    noiseScale(shardId, counter, tSec) {
       const ls = byShard.get(shardId);
       if (!ls) return 1;
       let scale = 1;
       for (const l of ls) {
-        if (l.type === 'variance_collapse' && active(l, t) && hits(l, counter)) {
+        if (l.type === 'variance_collapse' && active(l, tSec) && hits(l, counter)) {
           scale = Math.min(scale, l.magnitude);
         }
       }
       return scale;
     },
-    detached(shardId, kind, t) {
+    detached(shardId, kind, tSec) {
       const ls = byShard.get(shardId);
       if (!ls) return false;
       for (const l of ls) {
-        if (l.type === 'detachment' && l.detach_factor === kind && active(l, t)) return true;
+        if (l.type === 'detachment' && l.detach_factor === kind && active(l, tSec)) return true;
       }
       return false;
     },

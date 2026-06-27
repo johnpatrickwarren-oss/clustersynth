@@ -434,3 +434,47 @@ Tessera detection code.
 
 Tracks 1–3 don't change the committed topology fixtures. Track 4 adds new
 artifacts (factors, counters, labels) alongside the unchanged `TopologySnapshot`.
+
+---
+
+## Cadence-aware generation (landed)
+
+The generative model is continuous-time and sampled at `dt_s`, so cadence is
+statistically meaningful — generating at 1 Hz is *smoother, higher-frequency*
+data than hourly, not a relabel. (Previously `dt_s` only set the output
+timestamp, so "1 Hz" was statistically identical to hourly — the bug that forced
+tessera into a recall-costing large hourly window, decisions/0018.)
+
+**Model.**
+- **Factors** are Ornstein–Uhlenbeck: φ = exp(−dt_s/τ), innovation var = σ²(1−φ²),
+  so the *stationary* variance is constant across cadences. Each factor kind has a
+  wall-clock τ (`FACTOR_TAU`): cooling ~300 s (thermal inertia), power ~20 s,
+  fabric ~5 s (spiky), job ~120 s (+ diurnal/weekly calendar).
+- **Idiosyncratic noise** is *also* OU (per-counter `tauIdio`) — the key fix.
+  τ_idio ≫ dt_s (1 Hz) → smooth/correlated samples; τ_idio ≪ dt_s (coarse) →
+  decorrelates to ≈ iid (backward-compatible).
+- **Per-counter timescales**: temperature slow (cooling-dominated + τ_idio 120 s),
+  power/mem-bw seconds, sm_util sub-second/spiky.
+- **Calendar nonstationarity** (diurnal 86 400 s, weekly, regime step, thermal
+  ramp) and **faults** (onset/offset/duration, drift slope) are in absolute
+  wall-clock seconds keyed to `baseTs + t·dt_s`.
+
+**Consequences (verified in `test/q-r09-cadence.test.ts`).** raw lag-1 autocorr =
+exp(−dt_s/τ) → 1 as dt_s → 0; per-tick increment std ∝ √dt_s; a coarse run ≈ a
+downsampled fine run (marginal + autocorrelation within MC error); the
+common-mode-removed differenced residual is near-Gaussian at 1 Hz (kills the
+heavy-tailed-differencing artifact of coarse sampling).
+
+**Tractability / envelope.**
+- Counters stream lazily: each shard-counter is generated tick-by-tick via
+  `counterTicks` (O(1) state) and never materialized. Memory is **O(T·F)** for the
+  shared factor arrays (F = #factors ≪ N), not O(T·N). Measured: 1440 shards ×
+  10 000 ticks (1 Hz) → 542 MB NDJSON at **253 MB peak RSS**.
+- Disk: ≈ 5 counters × N × T × ~8 B. 1 Hz × 2 months × 100k GPU is ~20 TB — use a
+  **coarse long baseline + short 1 Hz monitoring window**.
+- `--downsample-to dt_out` (and `config.downsampleTo`) emits every
+  (dt_out / dt_s)-th tick — generate fine, store coarse. Must be a multiple of dt_s.
+
+Backward compatibility: there are no committed counter fixtures; the topology
+fixtures are unaffected. The 4B AC still holds — but the "factor-aware" detector
+must now also be autocorrelation-robust (the residual is smooth, by design).

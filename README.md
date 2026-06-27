@@ -167,13 +167,20 @@ pnpm cli diff a.json b.json                          # node / edge / kind deltas
 pnpm cli evolve out/topology.json --horizon-days 14 --at 1700200000  # churn log + status@T
 ```
 
-The generative model is a linear factor model with **heterogeneous per-shard
-loadings** over shared factors (cooling/power/fabric/job), **within-window
-nonstationarity**, and a **minority of labeled faults** (mean-shift / drift /
-variance-collapse / detachment) placed at the GPU / cooling-zone / pod level. The
-design rationale and the validity contract live in [`REALISM-PLAN.md`](REALISM-PLAN.md);
+The generative model is a **continuous-time** linear factor model with
+**heterogeneous per-shard loadings** over shared factors (cooling/power/fabric/job),
+**within-window nonstationarity**, and a **minority of labeled faults** (mean-shift /
+drift / variance-collapse / detachment) placed at the GPU / cooling-zone / pod level.
+The design rationale and the validity contract live in [`REALISM-PLAN.md`](REALISM-PLAN.md);
 the load-bearing invariant is that clustersynth takes **no dependency on Tessera
 detection code** — data flows one way.
+
+**Cadence matters.** The dynamics are Ornstein–Uhlenbeck processes defined in
+wall-clock units and sampled at `window.dt_s`, so generating at 1 Hz yields
+smoother, higher-frequency data than hourly (not a relabel): lag-1 autocorr =
+exp(−dt_s/τ), increment std ∝ √dt_s, and a coarse run ≈ a downsampled fine run.
+Target the DCGM band (1–30 s; 1 Hz supported). `--downsample-to <seconds>` emits a
+coarser cadence from a fine generation (coarse long baseline + short 1 Hz window).
 
 The key realism guarantee (`test/q-r04-nullcalibration.test.ts`): on a no-fault,
 nonstationary null, a stationarity-assuming per-shard test over-rejects (the
