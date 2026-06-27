@@ -180,8 +180,22 @@ export function buildFactorGraph(
   return { series, kindOf, T, dt_s, baseTs };
 }
 
+// A MATCHED CONTROL TWIN of a treatment shard: it loads on the treatment's EXACT factor instances
+// (`sf`) with the treatment's EXACT loadings (`loadingId` = the treatment shard id), so the common-mode
+// Σ_k λ_k·f_k(t) is shared bit-for-bit — but its idiosyncratic noise + baseline are keyed by the
+// control's OWN id (independent), and faults are NEVER applied to it. Therefore the contrast
+// treatment(t) − control(t) cancels the common-mode EXACTLY (it is model-free: no factor fit needed),
+// leaving (baseline offset) + (independent idiosyncratic difference) + (any treatment fault) — the
+// SPATIAL null behind Tessera Mode B (ADR 0019). This is a concurrent canary: same power/cooling/fabric/
+// job sensitivity, independent thermal noise, no injected fault.
+export interface ControlTwin {
+  sf: ShardFactors; // the treatment's factor instances (shared common mode)
+  loadingId: string; // the treatment shard id (shared loadings λ)
+}
+
 // Stream one shard-counter time-series tick by tick. O(1) memory per shard
 // (the idiosyncratic OU state); the shared factor arrays are precomputed once.
+// When `twin` is set, generate a matched control twin (see ControlTwin) — pass NO_FAULTS as `faults`.
 export function* counterTicks(
   seed: number,
   gpuId: string,
@@ -190,9 +204,11 @@ export function* counterTicks(
   graph: FactorGraph,
   faults: FaultApplier = NO_FAULTS,
   heterogeneity = LAMBDA_HETERO,
+  twin?: ControlTwin,
 ): Generator<number> {
   const { T, dt_s, baseTs } = graph;
-  const sf = shardFactors(gpuId, ctx);
+  const sf = twin ? twin.sf : shardFactors(gpuId, ctx);
+  const loadingId = twin ? twin.loadingId : gpuId; // twin shares the treatment's loadings λ
   const factorIdByKind: Array<[FactorKind, string | null]> = [
     ['cool', sf.cool],
     ['power', sf.power],
@@ -200,7 +216,7 @@ export function* counterTicks(
     ['job', sf.job],
   ];
   const lam = new Map<FactorKind, number>();
-  for (const [kind] of factorIdByKind) lam.set(kind, lambdaOf(seed, gpuId, counter, kind, heterogeneity));
+  for (const [kind] of factorIdByKind) lam.set(kind, lambdaOf(seed, loadingId, counter, kind, heterogeneity));
 
   const baseline =
     counter.base + rngFor(seed, `baseline:${gpuId}:${counter.name}`).normal(0, counter.baseSd);

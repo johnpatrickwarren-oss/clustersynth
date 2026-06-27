@@ -29,6 +29,7 @@ import {
   shardFactors,
   COUNTERS,
 } from './factor-model.js';
+import type { ControlTwin } from './factor-model.js';
 import type { FactorContext, FactorGraph, NonstationarityModes } from './factor-model.js';
 import { generateFaults } from './faults.js';
 import { generateHealth } from './health.js';
@@ -55,6 +56,10 @@ export interface ScenarioConfig {
   downsampleTo?: number;
   nonstationarity?: Partial<NonstationarityModes> | Array<keyof NonstationarityModes>;
   infra?: SharedInfraOpts;
+  // Emit a MATCHED CONTROL TWIN per GPU shard: same factor instances + loadings, independent
+  // idiosyncratic noise, NEVER faulted (a concurrent canary). Enables Tessera Mode B's spatial null
+  // (treatment − control cancels the common-mode exactly). Also honored via CS_CONTROL_ARM=1.
+  controlArm?: boolean;
   faults?:
     | false
     | {
@@ -219,6 +224,19 @@ const SELECTED_COUNTERS = (() => {
   return sub;
 })();
 
+// Control-arm twin id for a treatment GPU shard. A '#ctrl' suffix is JSON-safe and never collides with
+// a real topology id (which ends in `-gpu-N`); the twin's factor membership is passed explicitly, so the
+// suffix breaking id-parsing (gpuRackIndex) is irrelevant.
+export function controlIdOf(gpuId: string): string {
+  return `${gpuId}#ctrl`;
+}
+
+// Control arm on iff the config asks for it OR CS_CONTROL_ARM=1 (the env form lets every split-gen
+// process inherit it without editing the shared config).
+function controlArmEnabled(s: Scenario): boolean {
+  return s.config.controlArm === true || process.env.CS_CONTROL_ARM === '1';
+}
+
 // CS_SHARD_RANGE="start:count" — restrict counter emission to gpuIds[start, start+count).
 // Used to split a tier's generation across processes/cores. Returns the full list if unset.
 function shardRange<T>(ids: ReadonlyArray<T>): ReadonlyArray<T> {
@@ -241,30 +259,39 @@ export async function streamCounters(
   const w = backpressureWriter(out);
   const dtOut = downsampleTo ?? s.dt_s;
   const step = Math.max(1, Math.round(dtOut / s.dt_s));
+  const controlArm = controlArmEnabled(s);
+
+  // Emit one shard-counter row from a tick generator (downsampling + backpressure + flushing).
+  const emitRow = async (shardId: string, counterName: string, ticks: Generator<number>): Promise<void> => {
+    let buf =
+      `{"shard":${JSON.stringify(shardId)},"counter":${JSON.stringify(counterName)},` +
+      `"t0":${s.baseTs},"dt":${dtOut},"v":[`;
+    let i = 0;
+    let first = true;
+    for (const val of ticks) {
+      if (i % step === 0) {
+        buf += (first ? '' : ',') + round3(val);
+        first = false;
+        if (buf.length >= FLUSH) { await w(buf); buf = ''; }
+      }
+      i++;
+    }
+    buf += ']}\n';
+    await w(buf);
+  };
+
   // Optional CS_SHARD_RANGE="start:count" emits only gpuIds[start, start+count) — lets a
   // tier's generation be split across processes/cores (counterTicks is deterministic per
   // (seed,gpu,counter), so concatenated ranges are byte-identical to a single-process run).
+  // A control twin travels WITH its treatment shard in the same range, so splitting stays correct.
   const gpus = shardRange(s.gpuIds);
   for (const gpu of gpus) {
+    const twin: ControlTwin | null = controlArm ? { sf: shardFactors(gpu, s.ctx), loadingId: gpu } : null;
+    const controlId = controlIdOf(gpu);
     for (const counter of SELECTED_COUNTERS) {
-      let buf =
-        `{"shard":${JSON.stringify(gpu)},"counter":${JSON.stringify(counter.name)},` +
-        `"t0":${s.baseTs},"dt":${dtOut},"v":[`;
-      let i = 0;
-      let first = true;
-      for (const val of counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier)) {
-        if (i % step === 0) {
-          buf += (first ? '' : ',') + round3(val);
-          first = false;
-          if (buf.length >= FLUSH) {
-            await w(buf);
-            buf = '';
-          }
-        }
-        i++;
-      }
-      buf += ']}\n';
-      await w(buf);
+      await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier));
+      // Matched control twin: NO_FAULTS, shared factor instances + loadings, own idiosyncratic noise.
+      if (twin) await emitRow(controlId, counter.name, counterTicks(s.seed, controlId, counter, s.ctx, s.graph, NO_FAULTS, undefined, twin));
     }
   }
 }
@@ -274,9 +301,23 @@ export async function streamCounters(
 // so neither generation (JSON.stringify) nor a consumer (readFileSync) ever builds a
 // multi-GB string at scale. A factor-aware detector regresses counters on these.
 function factorsDoc(s: Scenario) {
+  const controlArm = controlArmEnabled(s);
   const membership: Record<string, ReturnType<typeof shardFactors>> = {};
-  for (const gpu of s.gpuIds) membership[gpu] = shardFactors(gpu, s.ctx);
-  return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, membership };
+  for (const gpu of s.gpuIds) {
+    const sf = shardFactors(gpu, s.ctx);
+    membership[gpu] = sf;
+    if (controlArm) membership[controlIdOf(gpu)] = sf; // twin shares the treatment's factor instances
+  }
+  return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, membership, controlArm };
+}
+
+// The labeled control arm: treatment→control pairing, for Tessera Mode B's spatial-null contrast.
+function controlDoc(s: Scenario) {
+  return {
+    T: s.T,
+    dt_s: s.dt_s,
+    pairs: s.gpuIds.map((g) => ({ treatment: g, control: controlIdOf(g) })),
+  };
 }
 
 // Stream the ground-truth factor series as NDJSON: one row per factor instance
@@ -346,6 +387,12 @@ export async function writeScenario(s: Scenario, outDir: string): Promise<string
   const labelsPath = join(outDir, 'labels.json');
   await writeJson(labelsPath, { faults: s.labels });
   paths.push(labelsPath);
+
+  if (controlArmEnabled(s)) {
+    const controlPath = join(outDir, 'control.json');
+    await writeJson(controlPath, controlDoc(s));
+    paths.push(controlPath);
+  }
 
   const healthPath = join(outDir, 'health.json');
   await writeJson(healthPath, s.health);
