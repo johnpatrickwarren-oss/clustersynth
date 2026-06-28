@@ -19,7 +19,7 @@
 // Smoothness scaling falls out of OU: raw lag-1 autocorr = exp(−dt_s/τ) → 1 as
 // dt_s → 0, and per-tick increment std ∝ √dt_s.
 
-import { rngFor } from '../common/rng.js';
+import { rngFor, type Prng } from '../common/rng.js';
 import { rackOf, podOf, gpuRackIndex } from '../common/ids.js';
 import type { CounterSpec, FactorKind, ShardFactors, FaultApplier } from './types.js';
 import { NO_FAULTS } from './types.js';
@@ -41,6 +41,28 @@ export const COUNTERS: CounterSpec[] = [
 export const FACTOR_TAU: Record<FactorKind, number> = { cool: 300, power: 20, fabric: 5, job: 120 };
 
 const LAMBDA_HETERO = 0.4;
+
+// Standardized Student-t draw (unit variance) for heavy-tailed idiosyncratic
+// innovations (opt-in via scenario `heavyTails.df`). df must be an integer ≥ 3 so
+// a finite variance exists; the draw is scaled by √((df−2)/df) so the OU
+// innovation variance — hence the stationary variance AND cadence-consistency
+// (q-r09) — is preserved and only the kurtosis rises. FarmTest (Fan-Ke-Sun-Zhou,
+// JASA 2019) is a *robust* procedure precisely because real high-dimensional data
+// are heavy-tailed; this lets the harness stress that honestly instead of
+// rewarding detectors that assume Gaussian idiosyncratic noise. t = Z₀ / √(mean of
+// df squared normals) is the textbook construction (Gaussian / √(χ²_df / df)).
+export function tStdT(r: Prng, df: number): number {
+  if (!Number.isInteger(df) || df < 3) {
+    throw new Error(`heavyTails.df must be an integer ≥ 3 (finite variance), got ${df}`);
+  }
+  const z = r.normal();
+  let ss = 0;
+  for (let i = 0; i < df; i++) {
+    const g = r.normal();
+    ss += g * g;
+  }
+  return (z / Math.sqrt(ss / df)) * Math.sqrt((df - 2) / df);
+}
 
 const DAY_S = 86_400;
 const WEEK_S = 604_800;
@@ -205,6 +227,9 @@ export function* counterTicks(
   faults: FaultApplier = NO_FAULTS,
   heterogeneity = LAMBDA_HETERO,
   twin?: ControlTwin,
+  // Opt-in heavy-tailed idiosyncratic innovations (Student-t with `tailDf` d.o.f.,
+  // standardized to unit variance). undefined ⇒ Gaussian (byte-identical legacy path).
+  tailDf?: number,
 ): Generator<number> {
   const { T, dt_s, baseTs } = graph;
   const sf = twin ? twin.sf : shardFactors(gpuId, ctx);
@@ -237,7 +262,10 @@ export function* counterTicks(
       if (lambda === 0) continue;
       y += lambda * graph.series.get(fid)![t]!;
     }
-    xIdio = phiI * xIdio + noise.normal(0, innovI);
+    // Gaussian innovation by default; heavy-tailed (standardized Student-t) when
+    // tailDf is set — same innovation variance, higher kurtosis only.
+    const innovDraw = tailDf === undefined ? noise.normal(0, innovI) : innovI * tStdT(noise, tailDf);
+    xIdio = phiI * xIdio + innovDraw;
     y += xIdio * faults.noiseScale(gpuId, counter.name, tSec); // variance-collapse scales idio
     y += faults.meanDelta(gpuId, counter.name, tSec);
     yield y;
@@ -253,10 +281,13 @@ export function realizeShard(
   graph: FactorGraph,
   faults: FaultApplier = NO_FAULTS,
   heterogeneity = LAMBDA_HETERO,
+  tailDf?: number,
 ): Record<string, number[]> {
   const out: Record<string, number[]> = {};
   for (const counter of COUNTERS) {
-    out[counter.name] = Array.from(counterTicks(seed, gpuId, counter, ctx, graph, faults, heterogeneity));
+    out[counter.name] = Array.from(
+      counterTicks(seed, gpuId, counter, ctx, graph, faults, heterogeneity, undefined, tailDf),
+    );
   }
   return out;
 }

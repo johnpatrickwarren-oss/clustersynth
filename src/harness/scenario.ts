@@ -60,6 +60,16 @@ export interface ScenarioConfig {
   // idiosyncratic noise, NEVER faulted (a concurrent canary). Enables Tessera Mode B's spatial null
   // (treatment − control cancels the common-mode exactly). Also honored via CS_CONTROL_ARM=1.
   controlArm?: boolean;
+  // Withhold the ground-truth factor sidecars (factors.json membership + factors.ndjson
+  // series) so a detector cannot regress on the true common mode and must ESTIMATE the
+  // factor space (number of factors K + loadings) from the counters alone. Turns the
+  // semi-oracle null-calibration into the genuinely adversarial test — heterogeneous λ
+  // only bites when the factor space must be recovered. Counters + labels are unaffected.
+  factorsHidden?: boolean;
+  // Opt-in heavy-tailed idiosyncratic noise: Student-t innovations with `df` degrees of
+  // freedom (integer ≥ 3), standardized to preserve the OU stationary variance — only
+  // kurtosis rises. Stresses detector robustness to non-Gaussian telemetry (cf. FarmTest).
+  heavyTails?: { df: number };
   faults?:
     | false
     | {
@@ -114,6 +124,9 @@ export function buildScenario(config: ScenarioConfig): Scenario {
   const dt_s = config.window?.dt_s ?? 15;
   const baseTs = 1_700_000_000;
   const modes = normalizeModes(config.nonstationarity);
+  if (config.heavyTails && (!Number.isInteger(config.heavyTails.df) || config.heavyTails.df < 3)) {
+    throw new Error(`heavyTails.df must be an integer ≥ 3 (finite variance), got ${config.heavyTails.df}`);
+  }
 
   // base topology, then enrich with shared infrastructure (Track 1B)
   const topology = buildClusterShaped({
@@ -260,6 +273,7 @@ export async function streamCounters(
   const dtOut = downsampleTo ?? s.dt_s;
   const step = Math.max(1, Math.round(dtOut / s.dt_s));
   const controlArm = controlArmEnabled(s);
+  const tailDf = s.config.heavyTails?.df;
 
   // Emit one shard-counter row from a tick generator (downsampling + backpressure + flushing).
   const emitRow = async (shardId: string, counterName: string, ticks: Generator<number>): Promise<void> => {
@@ -289,9 +303,10 @@ export async function streamCounters(
     const twin: ControlTwin | null = controlArm ? { sf: shardFactors(gpu, s.ctx), loadingId: gpu } : null;
     const controlId = controlIdOf(gpu);
     for (const counter of SELECTED_COUNTERS) {
-      await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier));
+      await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier, undefined, undefined, tailDf));
       // Matched control twin: NO_FAULTS, shared factor instances + loadings, own idiosyncratic noise.
-      if (twin) await emitRow(controlId, counter.name, counterTicks(s.seed, controlId, counter, s.ctx, s.graph, NO_FAULTS, undefined, twin));
+      // Twin shares the treatment's tail model so the contrast stays a fair like-for-like null.
+      if (twin) await emitRow(controlId, counter.name, counterTicks(s.seed, controlId, counter, s.ctx, s.graph, NO_FAULTS, undefined, twin, tailDf));
     }
   }
 }
@@ -302,13 +317,19 @@ export async function streamCounters(
 // multi-GB string at scale. A factor-aware detector regresses counters on these.
 function factorsDoc(s: Scenario) {
   const controlArm = controlArmEnabled(s);
+  // factorsHidden: expose only the schema/meta, never the per-shard factor membership —
+  // the detector must estimate the factor space from the counters (see writeScenario,
+  // which also skips factors.ndjson). Counters + labels remain the contract for scoring.
+  if (s.config.factorsHidden) {
+    return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, controlArm, factorsHidden: true };
+  }
   const membership: Record<string, ReturnType<typeof shardFactors>> = {};
   for (const gpu of s.gpuIds) {
     const sf = shardFactors(gpu, s.ctx);
     membership[gpu] = sf;
     if (controlArm) membership[controlIdOf(gpu)] = sf; // twin shares the treatment's factor instances
   }
-  return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, membership, controlArm };
+  return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, membership, controlArm, factorsHidden: false };
 }
 
 // The labeled control arm: treatment→control pairing, for Tessera Mode B's spatial-null contrast.
@@ -373,9 +394,13 @@ export async function writeScenario(s: Scenario, outDir: string): Promise<string
   await writeJson(factorsPath, factorsDoc(s));
   paths.push(factorsPath);
 
-  const factorsNdjsonPath = join(outDir, 'factors.ndjson');
-  await writeStreamFile(factorsNdjsonPath, (out) => streamFactors(out, s));
-  paths.push(factorsNdjsonPath);
+  // factorsHidden withholds the heavy ground-truth factor series entirely — the
+  // detector must recover the factor space from counters (factors.json carries meta only).
+  if (!s.config.factorsHidden) {
+    const factorsNdjsonPath = join(outDir, 'factors.ndjson');
+    await writeStreamFile(factorsNdjsonPath, (out) => streamFactors(out, s));
+    paths.push(factorsNdjsonPath);
+  }
 
   const allocPath = join(outDir, 'alloc.json');
   await writeJson(allocPath, {

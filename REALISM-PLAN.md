@@ -478,3 +478,104 @@ heavy-tailed-differencing artifact of coarse sampling).
 Backward compatibility: there are no committed counter fixtures; the topology
 fixtures are unaffected. The 4B AC still holds — but the "factor-aware" detector
 must now also be autocorrelation-robust (the residual is smooth, by design).
+
+---
+
+## Addendum — adherence to 2021–2026 statistical research (literature review)
+
+Status: **implemented** (2026-06-28 — all five follow-ups landed; see
+"Implementation" below). A deep literature review (26 primary sources →
+117 claims, 75 adversarially verified, none refuted) cross-referenced every
+statistical choice in the harness against the last 5 years of stat.ME/stat.ML.
+**Finding: the generative spine is best-practice; the gaps are in the
+evaluation/validation contract, not in generation.** This addendum records the
+verdicts and the five follow-ups (tracked as tasks #1–#5).
+
+### Verdicts by area
+
+| Area | Verdict | Key references (2021–2026 unless foundational) |
+|---|---|---|
+| **4A** Heterogeneous-loading factor model | ✅ **best practice** — this *is* the FarmTest DGP `X = μ + Bf + ε` | FarmTest (Fan, Ke, Sun & Zhou, JASA 2019); PFA (Fan, Han & Gu, JASA 2012; Fan & Han, JRSS-B 2017) |
+| **4B** FDR under cross-sectional dependence | ✅ generation correct; ⚠️ benchmark newer detectors | e-BH (Wang & Ramdas, JRSS-B 2022); derandomized knockoffs via e-values (Ren & Barber, 2023 / JRSS-B 2024); dynamic-factor-MT (2023, serial correlation) |
+| **4E** Hierarchical / spatial FDR localization | ✅ right structure; ⚠️ adopt named SOTA as targets | TreeBH (Bogomolov, Peterson, Benjamini & Sabatti, 2017/2021); resolution-adaptive knockoff e-values + LP (Gablenz & Sabatti, 2023/2024); Focused BH (Katsevich, Sabatti & Bogomolov, JASA 2023) + Weighted Focused BH (2025); STRAW spatial (2023); kernel/RKHS unified structured FDR (2026) |
+| Cadence — exact OU discretization | ✅ **best practice**, nothing newer | exact stationary AR(1)/OU discretization (φ=e^{−dt/τ}, innov var σ²(1−φ²)) — textbook-exact; search surfaced no superseding method |
+| 4B validator — AR(1) ESS inflation | ⚠️ **reasonable but dated as a general claim** | n_eff/ESS (classical, 2010); under nonstationarity HAC/Newey–West & fixed-b/self-normalization are non-pivotal and lose power (J. Econometrics 242(1), 2024; fixed-b-under-nonstationarity 2024) |
+| Control arm — matched-twin null | ✅ sound; 🔼 upgrade via conformal p-values | conformal outlier p-values (Bates, Candès, Lei & Sabatti, *Annals of Statistics* 51(1):149–178, 2023); integrative conformal (Liang, Sesia & Sun, 2024); conformal e-values (2023); MC-testing-as-conformal-novelty (2025); NC-DiD (2025); double negative control (Miao/Shi/Tchetgen Tchetgen, 2018/2024) |
+| 4D/4G — synthetic anomaly benchmark validity | ✅ **avoids the known flaws**; ⚠️ one metric rule | four-flaw critique (Wu & Keogh, TKDE 2022); point-adjustment is broken — random score ≈ F1-PA 1 (Kim et al., AAAI 2022; Doshi 2023; 2022 study); curated benchmark TSB-AD (2024) |
+
+**Why the benchmark already dodges the Wu–Keogh (2022) flaws:** non-trivial
+(heterogeneous λ + nonstationarity), realistic anomaly density (~1% minority,
+`faults.ts:45,147`, keeping the null true-null-dominated), correct ground-truth
+labels (every perturbation → exactly one label row, `faults.ts:108–121`), and no
+run-to-failure bias (bounded onset/offset windows). This is a defensible
+structural strength — preserve it.
+
+### Follow-ups (tracked tasks #1–#5)
+
+1. **Lock down the evaluation contract (Track 4G).** Ban point-adjustment F1;
+   mandate per-resolution FDR/power (à la TreeBH) + precision/recall on the
+   `affected_shards` blast radius; ship trivial baselines (random score, raw
+   input magnitude) a detector must clear. *Highest credibility win, lowest cost.*
+2. **`factorsHidden` scenario mode.** Withhold `factors.json` series/membership so
+   the detector must estimate K (eigenvalue-ratio criterion) and recover B —
+   turning the current semi-oracle 4B test into the genuinely adversarial one
+   (heterogeneous λ only bites when the factor space must be recovered).
+3. **Conformal-p-value analysis of the control-twin contrast.** The twins already
+   supply the exchangeable null sample conformal novelty detection needs; add a
+   path giving finite-sample distribution-free FDR (Bates et al. 2023) on top of
+   the model-free cancellation. Document that the twins make parallel-trends hold
+   bit-for-bit — an idealized best case vs. real-world NC-DiD.
+4. **Broaden the 4B "aware" detector** beyond AR(1)-ESS to e-BH / knockoffs and a
+   nonstationarity-robust prewhitened-LRV detector, so "aware controls FPR" isn't
+   tied to one correction (AR(1)-ESS is exactly right for the OU residual, but the
+   harness should prove robustness across methods).
+5. **(Optional) Heavy-tailed idiosyncratic noise.** Innovations are Gaussian;
+   FarmTest is robust precisely because real high-dimensional data are
+   heavy-tailed. An opt-in Student-t ε stresses detector robustness honestly.
+
+**Provenance:** the review's search/fetch/verify stages completed fully; only the
+report-formatting step crashed, so verdicts were synthesized from the verified
+claim set directly. A few author attributions are inferred from method names where
+the source claim didn't carry the full citation — verify exact arXiv IDs before
+citing in a paper.
+
+### Implementation (landed 2026-06-28 — 15 new tests, 105 green)
+
+All five follow-ups are implemented. The detector-independent reference methods
+live in **`src/harness/evaluation.ts`** (the harness owns the yardstick, never
+Tessera's detection code); generator changes are in `factor-model.ts` /
+`scenario.ts`. See **`EVALUATION.md`** for the scoring contract.
+
+1. **Evaluation contract (Task 1)** — `precisionRecall` (set-valued localization),
+   `perResolutionMetrics` (gpu/cdu/pod FDR+power, TreeBH-style), trivial baselines
+   `randomScoreBaseline` / `magnitudeScoreBaseline`, and `pointAdjustedF1_BANNED`
+   kept ONLY to prove the pathology (a 1-point detector scores F1≈1 under PA while
+   honest F1≈0.1). Tests: `test/q-r12-evaluation.test.ts`.
+2. **`factorsHidden` mode (Task 2)** — `ScenarioConfig.factorsHidden` withholds
+   `factors.json` membership + `factors.ndjson`; the detector recovers the factor
+   space with `estimateNumFactors` (eigenvalue-ratio K̂) + `pcaResiduals` (PCA factor
+   removal). The PCA-estimated detector controls FPR (<0.2) on the no-fault
+   nonstationary null where the naive test rejects >0.4. Tests:
+   `test/q-r13-factors-hidden.test.ts`.
+3. **Conformal contrast (Task 3)** — `changeScore` (max-CUSUM; immune to the twin's
+   constant baseline offset and to a mid-window box) + `conformalPValuesUpper` +
+   `benjaminiHochberg` give finite-sample distribution-free FDR on the control-twin
+   contrast (Bates et al. 2023). Tests: `test/q-r14-conformal.test.ts`. NB the twins
+   make parallel-trends hold bit-for-bit — an idealized best case vs. real NC-DiD.
+4. **Broadened aware detector (Task 4)** — `twoHalfZHAC` (Bartlett/Newey–West LRV)
+   also controls FPR alongside AR(1)-ESS; `ebh` (e-BH, arbitrary-dependence FDR) +
+   `maxAbsCusum`/`supBrownianBridgePValue`/`pToEValue` localize gpu faults with FDP
+   controlled. Tests: `test/q-r15-aware-detectors.test.ts`. (Key subtlety captured
+   in code: a per-shard AR(1)-LRV is inflated by the shard's OWN shift and hides it,
+   so the CUSUM is scaled by a GLOBAL median LRV — robust to the faulted minority.)
+5. **Heavy-tailed noise (Task 5)** — `ScenarioConfig.heavyTails: { df }` swaps the
+   OU idiosyncratic innovation for a standardized Student-t (`tStdT`), raising
+   kurtosis while preserving the stationary variance (cadence-consistency intact);
+   default-off is byte-identical to the Gaussian stream. Tests:
+   `test/q-r11-heavy-tails.test.ts`.
+
+New methods that emerged during implementation and are now part of the reference
+toolkit: `changeScore` / `maxAbsCusum` (change-point scan, the correct statistic for
+a mid-window box that two-half and whole-window-mean both miss), `longRunVarianceAR1`
+(exact LRV for the OU residual), and the `pToEValue` Vovk–Wang calibrator (p→e for
+e-BH).

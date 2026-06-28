@@ -58,6 +58,7 @@ export {
   lambdaOf,
 } from './harness/factor-model.js';
 export type { FactorGraph, FactorContext, NonstationarityModes } from './harness/factor-model.js';
+export { NO_FAULTS } from './harness/types.js';
 export { generateFaults, buildApplier } from './harness/faults.js';
 export type { FaultOpts, FaultSet, FaultTopo } from './harness/faults.js';
 export { generateHealth } from './harness/health.js';
@@ -68,7 +69,40 @@ export { generateChurn, stateAt, statusCounts } from './harness/evolution.js';
 export type { ChurnType, ChurnEvent, ChurnOpts, FleetState } from './harness/evolution.js';
 export { buildScenario, writeScenario, streamCounters, controlIdOf } from './harness/scenario.js';
 export type { ScenarioConfig, Scenario } from './harness/scenario.js';
+export { tStdT } from './harness/factor-model.js';
 export type { ControlTwin } from './harness/factor-model.js';
+// Track 4 — evaluation contract + reference statistical methods (detector-independent).
+export {
+  jacobiEigen,
+  shardCovEigenvalues,
+  estimateNumFactors,
+  pcaResiduals,
+  mean,
+  lag1,
+  twoHalfZ,
+  twoHalfZAR1,
+  twoHalfZHAC,
+  longRunVariance,
+  longRunVarianceAR1,
+  maxAbsCusum,
+  changeScore,
+  supBrownianBridgePValue,
+  pToEValue,
+  olsResiduals,
+  normalCdf,
+  zToPValueTwoSided,
+  zToEValueTwoSided,
+  benjaminiHochberg,
+  ebh,
+  conformalPValuesUpper,
+  contrastScore,
+  precisionRecall,
+  perResolutionMetrics,
+  randomScoreBaseline,
+  magnitudeScoreBaseline,
+  pointAdjustedF1_BANNED,
+} from './harness/evaluation.js';
+export type { Eigen, PrecisionRecall, ResolutionMetric } from './harness/evaluation.js';
 export type {
   FactorKind,
   CounterSpec,
