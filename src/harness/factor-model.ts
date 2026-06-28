@@ -19,7 +19,7 @@
 // Smoothness scaling falls out of OU: raw lag-1 autocorr = exp(−dt_s/τ) → 1 as
 // dt_s → 0, and per-tick increment std ∝ √dt_s.
 
-import { rngFor } from '../common/rng.js';
+import { rngFor, type Prng } from '../common/rng.js';
 import { rackOf, podOf, gpuRackIndex } from '../common/ids.js';
 import type { CounterSpec, FactorKind, ShardFactors, FaultApplier } from './types.js';
 import { NO_FAULTS } from './types.js';
@@ -41,6 +41,28 @@ export const COUNTERS: CounterSpec[] = [
 export const FACTOR_TAU: Record<FactorKind, number> = { cool: 300, power: 20, fabric: 5, job: 120 };
 
 const LAMBDA_HETERO = 0.4;
+
+// Standardized Student-t draw (unit variance) for heavy-tailed idiosyncratic
+// innovations (opt-in via scenario `heavyTails.df`). df must be an integer ≥ 3 so
+// a finite variance exists; the draw is scaled by √((df−2)/df) so the OU
+// innovation variance — hence the stationary variance AND cadence-consistency
+// (q-r09) — is preserved and only the kurtosis rises. FarmTest (Fan-Ke-Sun-Zhou,
+// JASA 2019) is a *robust* procedure precisely because real high-dimensional data
+// are heavy-tailed; this lets the harness stress that honestly instead of
+// rewarding detectors that assume Gaussian idiosyncratic noise. t = Z₀ / √(mean of
+// df squared normals) is the textbook construction (Gaussian / √(χ²_df / df)).
+export function tStdT(r: Prng, df: number): number {
+  if (!Number.isInteger(df) || df < 3) {
+    throw new Error(`heavyTails.df must be an integer ≥ 3 (finite variance), got ${df}`);
+  }
+  const z = r.normal();
+  let ss = 0;
+  for (let i = 0; i < df; i++) {
+    const g = r.normal();
+    ss += g * g;
+  }
+  return (z / Math.sqrt(ss / df)) * Math.sqrt((df - 2) / df);
+}
 
 const DAY_S = 86_400;
 const WEEK_S = 604_800;
@@ -180,8 +202,22 @@ export function buildFactorGraph(
   return { series, kindOf, T, dt_s, baseTs };
 }
 
+// A MATCHED CONTROL TWIN of a treatment shard: it loads on the treatment's EXACT factor instances
+// (`sf`) with the treatment's EXACT loadings (`loadingId` = the treatment shard id), so the common-mode
+// Σ_k λ_k·f_k(t) is shared bit-for-bit — but its idiosyncratic noise + baseline are keyed by the
+// control's OWN id (independent), and faults are NEVER applied to it. Therefore the contrast
+// treatment(t) − control(t) cancels the common-mode EXACTLY (it is model-free: no factor fit needed),
+// leaving (baseline offset) + (independent idiosyncratic difference) + (any treatment fault) — the
+// SPATIAL null behind Tessera Mode B (ADR 0019). This is a concurrent canary: same power/cooling/fabric/
+// job sensitivity, independent thermal noise, no injected fault.
+export interface ControlTwin {
+  sf: ShardFactors; // the treatment's factor instances (shared common mode)
+  loadingId: string; // the treatment shard id (shared loadings λ)
+}
+
 // Stream one shard-counter time-series tick by tick. O(1) memory per shard
 // (the idiosyncratic OU state); the shared factor arrays are precomputed once.
+// When `twin` is set, generate a matched control twin (see ControlTwin) — pass NO_FAULTS as `faults`.
 export function* counterTicks(
   seed: number,
   gpuId: string,
@@ -190,9 +226,14 @@ export function* counterTicks(
   graph: FactorGraph,
   faults: FaultApplier = NO_FAULTS,
   heterogeneity = LAMBDA_HETERO,
+  twin?: ControlTwin,
+  // Opt-in heavy-tailed idiosyncratic innovations (Student-t with `tailDf` d.o.f.,
+  // standardized to unit variance). undefined ⇒ Gaussian (byte-identical legacy path).
+  tailDf?: number,
 ): Generator<number> {
   const { T, dt_s, baseTs } = graph;
-  const sf = shardFactors(gpuId, ctx);
+  const sf = twin ? twin.sf : shardFactors(gpuId, ctx);
+  const loadingId = twin ? twin.loadingId : gpuId; // twin shares the treatment's loadings λ
   const factorIdByKind: Array<[FactorKind, string | null]> = [
     ['cool', sf.cool],
     ['power', sf.power],
@@ -200,7 +241,7 @@ export function* counterTicks(
     ['job', sf.job],
   ];
   const lam = new Map<FactorKind, number>();
-  for (const [kind] of factorIdByKind) lam.set(kind, lambdaOf(seed, gpuId, counter, kind, heterogeneity));
+  for (const [kind] of factorIdByKind) lam.set(kind, lambdaOf(seed, loadingId, counter, kind, heterogeneity));
 
   const baseline =
     counter.base + rngFor(seed, `baseline:${gpuId}:${counter.name}`).normal(0, counter.baseSd);
@@ -221,7 +262,10 @@ export function* counterTicks(
       if (lambda === 0) continue;
       y += lambda * graph.series.get(fid)![t]!;
     }
-    xIdio = phiI * xIdio + noise.normal(0, innovI);
+    // Gaussian innovation by default; heavy-tailed (standardized Student-t) when
+    // tailDf is set — same innovation variance, higher kurtosis only.
+    const innovDraw = tailDf === undefined ? noise.normal(0, innovI) : innovI * tStdT(noise, tailDf);
+    xIdio = phiI * xIdio + innovDraw;
     y += xIdio * faults.noiseScale(gpuId, counter.name, tSec); // variance-collapse scales idio
     y += faults.meanDelta(gpuId, counter.name, tSec);
     yield y;
@@ -237,10 +281,13 @@ export function realizeShard(
   graph: FactorGraph,
   faults: FaultApplier = NO_FAULTS,
   heterogeneity = LAMBDA_HETERO,
+  tailDf?: number,
 ): Record<string, number[]> {
   const out: Record<string, number[]> = {};
   for (const counter of COUNTERS) {
-    out[counter.name] = Array.from(counterTicks(seed, gpuId, counter, ctx, graph, faults, heterogeneity));
+    out[counter.name] = Array.from(
+      counterTicks(seed, gpuId, counter, ctx, graph, faults, heterogeneity, undefined, tailDf),
+    );
   }
   return out;
 }

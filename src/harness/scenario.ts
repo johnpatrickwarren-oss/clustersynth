@@ -29,6 +29,7 @@ import {
   shardFactors,
   COUNTERS,
 } from './factor-model.js';
+import type { ControlTwin } from './factor-model.js';
 import type { FactorContext, FactorGraph, NonstationarityModes } from './factor-model.js';
 import { generateFaults } from './faults.js';
 import { generateHealth } from './health.js';
@@ -55,6 +56,20 @@ export interface ScenarioConfig {
   downsampleTo?: number;
   nonstationarity?: Partial<NonstationarityModes> | Array<keyof NonstationarityModes>;
   infra?: SharedInfraOpts;
+  // Emit a MATCHED CONTROL TWIN per GPU shard: same factor instances + loadings, independent
+  // idiosyncratic noise, NEVER faulted (a concurrent canary). Enables Tessera Mode B's spatial null
+  // (treatment − control cancels the common-mode exactly). Also honored via CS_CONTROL_ARM=1.
+  controlArm?: boolean;
+  // Withhold the ground-truth factor sidecars (factors.json membership + factors.ndjson
+  // series) so a detector cannot regress on the true common mode and must ESTIMATE the
+  // factor space (number of factors K + loadings) from the counters alone. Turns the
+  // semi-oracle null-calibration into the genuinely adversarial test — heterogeneous λ
+  // only bites when the factor space must be recovered. Counters + labels are unaffected.
+  factorsHidden?: boolean;
+  // Opt-in heavy-tailed idiosyncratic noise: Student-t innovations with `df` degrees of
+  // freedom (integer ≥ 3), standardized to preserve the OU stationary variance — only
+  // kurtosis rises. Stresses detector robustness to non-Gaussian telemetry (cf. FarmTest).
+  heavyTails?: { df: number };
   faults?:
     | false
     | {
@@ -109,6 +124,9 @@ export function buildScenario(config: ScenarioConfig): Scenario {
   const dt_s = config.window?.dt_s ?? 15;
   const baseTs = 1_700_000_000;
   const modes = normalizeModes(config.nonstationarity);
+  if (config.heavyTails && (!Number.isInteger(config.heavyTails.df) || config.heavyTails.df < 3)) {
+    throw new Error(`heavyTails.df must be an integer ≥ 3 (finite variance), got ${config.heavyTails.df}`);
+  }
 
   // base topology, then enrich with shared infrastructure (Track 1B)
   const topology = buildClusterShaped({
@@ -206,6 +224,42 @@ function backpressureWriter(out: Writable): (chunk: string) => Promise<void> {
 
 const FLUSH = 1 << 20; // ~1 MB
 
+// Optional counter subset via CS_COUNTERS (comma-separated counter names). Lets a
+// consumer generate a long-duration, high-cadence run for a single DCGM counter
+// (e.g. CS_COUNTERS=gpu_temp_c) without paying the 5x volume of the full set.
+// Applied to both the emitted counter rows and the factors sidecar's counter specs.
+const SELECTED_COUNTERS = (() => {
+  const env = process.env.CS_COUNTERS;
+  if (!env) return COUNTERS;
+  const names = new Set(env.split(',').map((x) => x.trim()).filter(Boolean));
+  const sub = COUNTERS.filter((c) => names.has(c.name));
+  if (sub.length === 0) throw new Error(`CS_COUNTERS matched no known counter: ${env}`);
+  return sub;
+})();
+
+// Control-arm twin id for a treatment GPU shard. A '#ctrl' suffix is JSON-safe and never collides with
+// a real topology id (which ends in `-gpu-N`); the twin's factor membership is passed explicitly, so the
+// suffix breaking id-parsing (gpuRackIndex) is irrelevant.
+export function controlIdOf(gpuId: string): string {
+  return `${gpuId}#ctrl`;
+}
+
+// Control arm on iff the config asks for it OR CS_CONTROL_ARM=1 (the env form lets every split-gen
+// process inherit it without editing the shared config).
+function controlArmEnabled(s: Scenario): boolean {
+  return s.config.controlArm === true || process.env.CS_CONTROL_ARM === '1';
+}
+
+// CS_SHARD_RANGE="start:count" — restrict counter emission to gpuIds[start, start+count).
+// Used to split a tier's generation across processes/cores. Returns the full list if unset.
+function shardRange<T>(ids: ReadonlyArray<T>): ReadonlyArray<T> {
+  const env = process.env.CS_SHARD_RANGE;
+  if (!env) return ids;
+  const [s, c] = env.split(':').map((x) => parseInt(x, 10));
+  if (!Number.isFinite(s) || !Number.isFinite(c)) throw new Error(`bad CS_SHARD_RANGE: ${env} (want start:count)`);
+  return ids.slice(s, s + c);
+}
+
 // Stream per-shard counter rows as NDJSON. Memory is flat in T: the shared factor
 // arrays are precomputed once (O(T·F)); each shard-counter is generated tick by
 // tick via counterTicks (O(1) state) and never materialized as an array. Optional
@@ -218,40 +272,92 @@ export async function streamCounters(
   const w = backpressureWriter(out);
   const dtOut = downsampleTo ?? s.dt_s;
   const step = Math.max(1, Math.round(dtOut / s.dt_s));
-  for (const gpu of s.gpuIds) {
-    for (const counter of COUNTERS) {
-      let buf =
-        `{"shard":${JSON.stringify(gpu)},"counter":${JSON.stringify(counter.name)},` +
-        `"t0":${s.baseTs},"dt":${dtOut},"v":[`;
-      let i = 0;
-      let first = true;
-      for (const val of counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier)) {
-        if (i % step === 0) {
-          buf += (first ? '' : ',') + round3(val);
-          first = false;
-          if (buf.length >= FLUSH) {
-            await w(buf);
-            buf = '';
-          }
-        }
-        i++;
+  const controlArm = controlArmEnabled(s);
+  const tailDf = s.config.heavyTails?.df;
+
+  // Emit one shard-counter row from a tick generator (downsampling + backpressure + flushing).
+  const emitRow = async (shardId: string, counterName: string, ticks: Generator<number>): Promise<void> => {
+    let buf =
+      `{"shard":${JSON.stringify(shardId)},"counter":${JSON.stringify(counterName)},` +
+      `"t0":${s.baseTs},"dt":${dtOut},"v":[`;
+    let i = 0;
+    let first = true;
+    for (const val of ticks) {
+      if (i % step === 0) {
+        buf += (first ? '' : ',') + round3(val);
+        first = false;
+        if (buf.length >= FLUSH) { await w(buf); buf = ''; }
       }
-      buf += ']}\n';
-      await w(buf);
+      i++;
+    }
+    buf += ']}\n';
+    await w(buf);
+  };
+
+  // Optional CS_SHARD_RANGE="start:count" emits only gpuIds[start, start+count) — lets a
+  // tier's generation be split across processes/cores (counterTicks is deterministic per
+  // (seed,gpu,counter), so concatenated ranges are byte-identical to a single-process run).
+  // A control twin travels WITH its treatment shard in the same range, so splitting stays correct.
+  const gpus = shardRange(s.gpuIds);
+  for (const gpu of gpus) {
+    const twin: ControlTwin | null = controlArm ? { sf: shardFactors(gpu, s.ctx), loadingId: gpu } : null;
+    const controlId = controlIdOf(gpu);
+    for (const counter of SELECTED_COUNTERS) {
+      await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier, undefined, undefined, tailDf));
+      // Matched control twin: NO_FAULTS, shared factor instances + loadings, own idiosyncratic noise.
+      // Twin shares the treatment's tail model so the contrast stays a fair like-for-like null.
+      if (twin) await emitRow(controlId, counter.name, counterTicks(s.seed, controlId, counter, s.ctx, s.graph, NO_FAULTS, undefined, twin, tailDf));
     }
   }
 }
 
-// Ground-truth factor sidecar: the shared common-mode processes plus each shard's
-// factor membership. A factor-aware detector regresses counters on these.
+// Ground-truth factor sidecar — META only (T, dt_s, counter specs, per-shard factor
+// membership). The heavy per-factor series live in the streamed factors.ndjson sidecar
+// so neither generation (JSON.stringify) nor a consumer (readFileSync) ever builds a
+// multi-GB string at scale. A factor-aware detector regresses counters on these.
 function factorsDoc(s: Scenario) {
-  const factors: Record<string, { kind: string; series: number[] }> = {};
-  for (const [id, series] of s.graph.series) {
-    factors[id] = { kind: s.graph.kindOf.get(id)!, series: series.map(round3) };
+  const controlArm = controlArmEnabled(s);
+  // factorsHidden: expose only the schema/meta, never the per-shard factor membership —
+  // the detector must estimate the factor space from the counters (see writeScenario,
+  // which also skips factors.ndjson). Counters + labels remain the contract for scoring.
+  if (s.config.factorsHidden) {
+    return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, controlArm, factorsHidden: true };
   }
   const membership: Record<string, ReturnType<typeof shardFactors>> = {};
-  for (const gpu of s.gpuIds) membership[gpu] = shardFactors(gpu, s.ctx);
-  return { T: s.T, dt_s: s.dt_s, counters: COUNTERS, factors, membership };
+  for (const gpu of s.gpuIds) {
+    const sf = shardFactors(gpu, s.ctx);
+    membership[gpu] = sf;
+    if (controlArm) membership[controlIdOf(gpu)] = sf; // twin shares the treatment's factor instances
+  }
+  return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, membership, controlArm, factorsHidden: false };
+}
+
+// The labeled control arm: treatment→control pairing, for Tessera Mode B's spatial-null contrast.
+function controlDoc(s: Scenario) {
+  return {
+    T: s.T,
+    dt_s: s.dt_s,
+    pairs: s.gpuIds.map((g) => ({ treatment: g, control: controlIdOf(g) })),
+  };
+}
+
+// Stream the ground-truth factor series as NDJSON: one row per factor instance
+// {"id","kind","v":[...]}. Flat memory in T (each series is already materialised in
+// s.graph.series, but we serialise + flush incrementally rather than buffering the
+// whole document). Mirrors streamCounters so a consumer streams both the same way.
+async function streamFactors(out: Writable, s: Scenario): Promise<void> {
+  const w = backpressureWriter(out);
+  for (const [id, series] of s.graph.series) {
+    let buf = `{"id":${JSON.stringify(id)},"kind":${JSON.stringify(s.graph.kindOf.get(id)!)},"v":[`;
+    let first = true;
+    for (const val of series) {
+      buf += (first ? '' : ',') + round3(val);
+      first = false;
+      if (buf.length >= FLUSH) { await w(buf); buf = ''; }
+    }
+    buf += ']}\n';
+    await w(buf);
+  }
 }
 
 async function writeJson(path: string, obj: unknown): Promise<void> {
@@ -268,10 +374,18 @@ async function writeStreamFile(path: string, fn: (out: Writable) => Promise<void
   await once(stream, 'finish');
 }
 
-// Emit the full bundle to outDir.
+// Emit the full bundle to outDir. CS_COUNTERS_ONLY=1 writes ONLY counters.ndjson (skips
+// topology/factors/alloc/labels/health/fabric) — for range-split generation where one
+// process writes the shared sidecars and the rest contribute counter shards.
 export async function writeScenario(s: Scenario, outDir: string): Promise<string[]> {
   mkdirSync(outDir, { recursive: true });
   const paths: string[] = [];
+  if (process.env.CS_COUNTERS_ONLY === '1') {
+    const countersOnly = join(outDir, 'counters.ndjson');
+    await writeStreamFile(countersOnly, (out) => streamCounters(out, s, s.config.downsampleTo));
+    paths.push(countersOnly);
+    return paths;
+  }
   const topoPath = join(outDir, 'topology.json');
   await writeStreamFile(topoPath, (out) => writeSnapshot(out, s.topology));
   paths.push(topoPath);
@@ -279,6 +393,14 @@ export async function writeScenario(s: Scenario, outDir: string): Promise<string
   const factorsPath = join(outDir, 'factors.json');
   await writeJson(factorsPath, factorsDoc(s));
   paths.push(factorsPath);
+
+  // factorsHidden withholds the heavy ground-truth factor series entirely — the
+  // detector must recover the factor space from counters (factors.json carries meta only).
+  if (!s.config.factorsHidden) {
+    const factorsNdjsonPath = join(outDir, 'factors.ndjson');
+    await writeStreamFile(factorsNdjsonPath, (out) => streamFactors(out, s));
+    paths.push(factorsNdjsonPath);
+  }
 
   const allocPath = join(outDir, 'alloc.json');
   await writeJson(allocPath, {
@@ -290,6 +412,12 @@ export async function writeScenario(s: Scenario, outDir: string): Promise<string
   const labelsPath = join(outDir, 'labels.json');
   await writeJson(labelsPath, { faults: s.labels });
   paths.push(labelsPath);
+
+  if (controlArmEnabled(s)) {
+    const controlPath = join(outDir, 'control.json');
+    await writeJson(controlPath, controlDoc(s));
+    paths.push(controlPath);
+  }
 
   const healthPath = join(outDir, 'health.json');
   await writeJson(healthPath, s.health);
