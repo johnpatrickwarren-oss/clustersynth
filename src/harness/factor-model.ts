@@ -230,10 +230,16 @@ export function* counterTicks(
   // Opt-in heavy-tailed idiosyncratic innovations (Student-t with `tailDf` d.o.f.,
   // standardized to unit variance). undefined ⇒ Gaussian (byte-identical legacy path).
   tailDf?: number,
+  // Look up faults under THIS id instead of gpuId (idiosyncratic noise + baseline stay keyed by gpuId).
+  // Used to CONTAMINATE a control twin with its treatment's fault (Tessera ADR 0021 validation): the twin
+  // keeps its own independent noise but carries the treatment's mean_shift/drift/detachment. undefined ⇒
+  // faults keyed by gpuId (byte-identical legacy path).
+  faultId?: string,
 ): Generator<number> {
   const { T, dt_s, baseTs } = graph;
   const sf = twin ? twin.sf : shardFactors(gpuId, ctx);
   const loadingId = twin ? twin.loadingId : gpuId; // twin shares the treatment's loadings λ
+  const faultLookupId = faultId ?? gpuId; // fault blast-radius lookup id (≠ gpuId only for a contaminated twin)
   const factorIdByKind: Array<[FactorKind, string | null]> = [
     ['cool', sf.cool],
     ['power', sf.power],
@@ -255,19 +261,19 @@ export function* counterTicks(
   for (let t = 0; t < T; t++) {
     const tSec = baseTs + t * dt_s;
     let y = baseline;
-    for (const [kind, fid] of factorIdByKind) {
-      if (fid === null) continue;
-      if (faults.detached(gpuId, kind, tSec)) continue; // detachment fault
+    for (const [kind, factorId] of factorIdByKind) {
+      if (factorId === null) continue;
+      if (faults.detached(faultLookupId, kind, tSec)) continue; // detachment fault
       const lambda = lam.get(kind)!;
       if (lambda === 0) continue;
-      y += lambda * graph.series.get(fid)![t]!;
+      y += lambda * graph.series.get(factorId)![t]!;
     }
     // Gaussian innovation by default; heavy-tailed (standardized Student-t) when
     // tailDf is set — same innovation variance, higher kurtosis only.
     const innovDraw = tailDf === undefined ? noise.normal(0, innovI) : innovI * tStdT(noise, tailDf);
     xIdio = phiI * xIdio + innovDraw;
-    y += xIdio * faults.noiseScale(gpuId, counter.name, tSec); // variance-collapse scales idio
-    y += faults.meanDelta(gpuId, counter.name, tSec);
+    y += xIdio * faults.noiseScale(faultLookupId, counter.name, tSec); // variance-collapse scales idio
+    y += faults.meanDelta(faultLookupId, counter.name, tSec);
     yield y;
   }
 }

@@ -38,6 +38,7 @@ import { generateFabric } from './fabric.js';
 import { generateChurn } from './evolution.js';
 import { NO_FAULTS } from './types.js';
 import type { FaultApplier, FaultLabel } from './types.js';
+import { rngFor } from '../common/rng.js';
 
 export interface ScenarioConfig {
   family: Family;
@@ -250,6 +251,49 @@ function controlArmEnabled(s: Scenario): boolean {
   return s.config.controlArm === true || process.env.CS_CONTROL_ARM === '1';
 }
 
+// ─── ADR 0021 validation: control-twin CONTAMINATION + DECORRELATION fault modes ───────────────────
+// These deliberately BREAK the matched-control-twin assumptions so Tessera's control-twin validity
+// detector (ADR 0021) can be validated against ground truth. Env-only (like CS_CONTROL_ARM), off by default
+// so a normal control-arm run is byte-identical.
+//   CS_CONTAMINATE=both|control   inject the treatment's fault into the CONTROL twin:
+//       both    — for a fraction of FAULTED shards, fault BOTH members → the contrast CANCELS the fault
+//                 → a MISS without the detector (Test B catches it: the control fires vs the control cohort).
+//       control — for a fraction of HEALTHY shards, fault the CONTROL only (treatment stays clean) → the
+//                 contrast FALSELY fires → a FALSE POSITIVE without the detector (the sign-blindness case).
+//   CS_CONTAMINATE_FRAC=f         fraction of eligible shards to contaminate (default 0.5).
+//   CS_DECORRELATE_FRAC=f         fraction of pairs whose twin uses its OWN loadings (λ diverge) → residual
+//                                 common-mode leaks into the contrast → non-comparability (Test A catches it).
+type ContamMode = 'both' | 'control' | null;
+interface ContaminationPlan { mode: ContamMode; contaminated: Set<string>; decorrelated: Set<string>; }
+
+function faultedGpuSet(s: Scenario): Set<string> {
+  const out = new Set<string>();
+  for (const l of s.labels) if (l.level === 'gpu') for (const sh of l.affected_shards) out.add(sh);
+  return out;
+}
+
+// Deterministic (pure in seed + ids + env): used identically by streamCounters and controlDoc.
+function contaminationPlan(s: Scenario): ContaminationPlan {
+  const env = process.env.CS_CONTAMINATE;
+  const mode: ContamMode = env === 'both' || env === 'control' ? env : null;
+  const fracC = process.env.CS_CONTAMINATE_FRAC ? Number(process.env.CS_CONTAMINATE_FRAC) : 0.5;
+  const fracD = process.env.CS_DECORRELATE_FRAC ? Number(process.env.CS_DECORRELATE_FRAC) : 0;
+  const faulted = faultedGpuSet(s);
+  // Both modes draw from FAULTED shards (the applier only carries faults for those): 'both' DUPLICATES the
+  // treatment's fault onto the control (→ cancels → miss); 'control' MOVES it (treatment clean → contrast
+  // fires → false positive). For 'control', the treatment is healthy, so the scorer must drop these from
+  // the positive set (recorded in control.json).
+  const contaminated = new Set<string>();
+  if (mode) {
+    for (const g of s.gpuIds) {
+      if (faulted.has(g) && rngFor(s.seed, `contam:${g}`).float() < fracC) contaminated.add(g);
+    }
+  }
+  const decorrelated = new Set<string>();
+  if (fracD > 0) for (const g of s.gpuIds) if (rngFor(s.seed, `decorr:${g}`).float() < fracD) decorrelated.add(g);
+  return { mode, contaminated, decorrelated };
+}
+
 // CS_SHARD_RANGE="start:count" — restrict counter emission to gpuIds[start, start+count).
 // Used to split a tier's generation across processes/cores. Returns the full list if unset.
 function shardRange<T>(ids: ReadonlyArray<T>): ReadonlyArray<T> {
@@ -299,14 +343,23 @@ export async function streamCounters(
   // (seed,gpu,counter), so concatenated ranges are byte-identical to a single-process run).
   // A control twin travels WITH its treatment shard in the same range, so splitting stays correct.
   const gpus = shardRange(s.gpuIds);
+  const plan = contaminationPlan(s);
   for (const gpu of gpus) {
-    const twin: ControlTwin | null = controlArm ? { sf: shardFactors(gpu, s.ctx), loadingId: gpu } : null;
-    const controlId = controlIdOf(gpu);
+    const decorr = plan.decorrelated.has(gpu);
+    // decorrelated twin uses its OWN id for loadings → λ diverge → the contrast no longer cancels the
+    // common mode (non-comparability). Otherwise it shares the treatment's loadings (matched twin).
+    const cId = controlIdOf(gpu);
+    const twin: ControlTwin | null = controlArm ? { sf: shardFactors(gpu, s.ctx), loadingId: decorr ? cId : gpu } : null;
+    const contaminated = plan.contaminated.has(gpu);
+    // 'control' mode makes the TREATMENT clean (the fault moves to the control); else treatment is normal.
+    const treatmentFaults = plan.mode === 'control' && contaminated ? NO_FAULTS : s.applier;
+    // a contaminated control carries the TREATMENT's fault (faultId=gpu), keeping its own idiosyncratic noise.
+    const controlFaults = contaminated ? s.applier : NO_FAULTS;
     for (const counter of SELECTED_COUNTERS) {
-      await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, s.applier, undefined, undefined, tailDf));
-      // Matched control twin: NO_FAULTS, shared factor instances + loadings, own idiosyncratic noise.
-      // Twin shares the treatment's tail model so the contrast stays a fair like-for-like null.
-      if (twin) await emitRow(controlId, counter.name, counterTicks(s.seed, controlId, counter, s.ctx, s.graph, NO_FAULTS, undefined, twin, tailDf));
+      await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, treatmentFaults, undefined, undefined, tailDf));
+      // Matched control twin: shared factor instances + loadings, own idiosyncratic noise; NO_FAULTS unless
+      // contaminated (ADR 0021 validation). Twin shares the treatment's tail model — fair like-for-like null.
+      if (twin) await emitRow(cId, counter.name, counterTicks(s.seed, cId, counter, s.ctx, s.graph, controlFaults, undefined, twin, tailDf, gpu));
     }
   }
 }
@@ -333,11 +386,16 @@ function factorsDoc(s: Scenario) {
 }
 
 // The labeled control arm: treatment→control pairing, for Tessera Mode B's spatial-null contrast.
+// Also emits the ADR 0021 validation ground truth: which control twins were contaminated / decorrelated,
+// so Tessera's control-twin validity detector can be scored (off by default → both lists empty + mode null).
 function controlDoc(s: Scenario) {
+  const plan = contaminationPlan(s);
   return {
     T: s.T,
     dt_s: s.dt_s,
     pairs: s.gpuIds.map((g) => ({ treatment: g, control: controlIdOf(g) })),
+    contamination: { mode: plan.mode, shards: [...plan.contaminated].sort() },
+    decorrelated: [...plan.decorrelated].sort(),
   };
 }
 
