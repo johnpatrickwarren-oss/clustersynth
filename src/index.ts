@@ -67,7 +67,7 @@ export { generateFabric, edgeKey } from './harness/fabric.js';
 export type { LinkAttr, FabricOpts } from './harness/fabric.js';
 export { generateChurn, stateAt, statusCounts } from './harness/evolution.js';
 export type { ChurnType, ChurnEvent, ChurnOpts, FleetState } from './harness/evolution.js';
-export { buildScenario, writeScenario, streamCounters, controlIdOf } from './harness/scenario.js';
+export { buildScenario, writeScenario, streamCounters, controlIdOf, controlId2Of } from './harness/scenario.js';
 export type { ScenarioConfig, Scenario } from './harness/scenario.js';
 export { tStdT } from './harness/factor-model.js';
 export type { ControlTwin } from './harness/factor-model.js';

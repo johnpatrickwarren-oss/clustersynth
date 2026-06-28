@@ -11,7 +11,7 @@ import { strict as a } from 'node:assert';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildScenario, writeScenario } from '../src/index.js';
+import { buildScenario, writeScenario, controlId2Of } from '../src/index.js';
 
 function variance(xs: number[]): number {
   const m = xs.reduce((s, x) => s + x, 0) / xs.length;
@@ -89,4 +89,25 @@ test('CS_CONTAMINATE=both: contaminated controls ⊆ faulted shards and carry th
     const p = (ctl.pairs as Array<{ treatment: string; control: string }>).find((x) => x.treatment === g)!;
     a.ok(kappa(rows.get(p.treatment)!, rows.get(p.control)!) < 0.2, 'shared fault cancels in the contrast (κ small)');
   }
+});
+
+test('CS_TRIAD: a second matched twin (#ctrl2) is emitted; c1−c2 is a clean control-vs-control null', async () => {
+  const dir = await gen({ CS_TRIAD: '1' });
+  const ctl = JSON.parse(readFileSync(join(dir, 'control.json'), 'utf8'));
+  a.equal(ctl.triad, true);
+  a.equal(ctl.pairs[0].control2, controlId2Of(ctl.pairs[0].treatment), 'pair carries the second twin id');
+  const rows = counters(dir, 'gpu_temp_c');
+  a.equal(rows.size, 72 * 3, '72 treatment + 72 c1 + 72 c2 rows for one counter');
+  // c1 − c2 (two matched, never-faulted twins) cancels the common-mode → tiny κ, like a healthy pair.
+  for (const p of (ctl.pairs as Array<{ control: string; control2: string }>).slice(0, 10)) {
+    a.ok(kappa(rows.get(p.control)!, rows.get(p.control2)!) < 0.1, 'c1−c2 cancels the common-mode (matched siblings)');
+  }
+});
+
+test('off by default: no second twin, no control2 field', async () => {
+  const dir = await gen({});
+  const ctl = JSON.parse(readFileSync(join(dir, 'control.json'), 'utf8'));
+  a.ok(!ctl.triad, 'triad off by default');
+  a.equal(ctl.pairs[0].control2, undefined, 'no control2 without CS_TRIAD');
+  a.equal(counters(dir, 'gpu_temp_c').size, 72 * 2, 'only treatment + c1 rows');
 });

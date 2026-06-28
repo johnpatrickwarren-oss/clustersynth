@@ -61,6 +61,9 @@ export interface ScenarioConfig {
   // idiosyncratic noise, NEVER faulted (a concurrent canary). Enables Tessera Mode B's spatial null
   // (treatment − control cancels the common-mode exactly). Also honored via CS_CONTROL_ARM=1.
   controlArm?: boolean;
+  // Emit a SECOND matched control twin per GPU (the ADR 0022 control triad). Implies controlArm. Also via
+  // CS_TRIAD=1. Off by default. control.json then carries `control2` per pair.
+  triad?: boolean;
   // Withhold the ground-truth factor sidecars (factors.json membership + factors.ndjson
   // series) so a detector cannot regress on the true common mode and must ESTIMATE the
   // factor space (number of factors K + loadings) from the counters alone. Turns the
@@ -245,10 +248,23 @@ export function controlIdOf(gpuId: string): string {
   return `${gpuId}#ctrl`;
 }
 
+// The SECOND matched control twin (Tessera ADR 0022 control triad). Like #ctrl, it shares the treatment's
+// factor instances + loadings (common-mode cancels in any within-triad contrast) but has its OWN independent
+// idiosyncratic noise and is never faulted — so c1 − c2 is a clean control-vs-control null.
+export function controlId2Of(gpuId: string): string {
+  return `${gpuId}#ctrl2`;
+}
+
 // Control arm on iff the config asks for it OR CS_CONTROL_ARM=1 (the env form lets every split-gen
 // process inherit it without editing the shared config).
 function controlArmEnabled(s: Scenario): boolean {
   return s.config.controlArm === true || process.env.CS_CONTROL_ARM === '1';
+}
+
+// Control TRIAD (ADR 0022): emit a SECOND matched twin per GPU. Implies the control arm. CS_TRIAD=1 or
+// config.triad. Off by default → byte-identical single-twin control arm.
+function triadEnabled(s: Scenario): boolean {
+  return (s.config.triad === true || process.env.CS_TRIAD === '1') && controlArmEnabled(s);
 }
 
 // ─── ADR 0021 validation: control-twin CONTAMINATION + DECORRELATION fault modes ───────────────────
@@ -344,22 +360,28 @@ export async function streamCounters(
   // A control twin travels WITH its treatment shard in the same range, so splitting stays correct.
   const gpus = shardRange(s.gpuIds);
   const plan = contaminationPlan(s);
+  const triad = triadEnabled(s);
   for (const gpu of gpus) {
     const decorr = plan.decorrelated.has(gpu);
     // decorrelated twin uses its OWN id for loadings → λ diverge → the contrast no longer cancels the
     // common mode (non-comparability). Otherwise it shares the treatment's loadings (matched twin).
     const cId = controlIdOf(gpu);
+    const c2Id = controlId2Of(gpu);
     const twin: ControlTwin | null = controlArm ? { sf: shardFactors(gpu, s.ctx), loadingId: decorr ? cId : gpu } : null;
+    // The triad's SECOND twin is always matched (shares the treatment's loadings) and never faulted — the
+    // clean sibling that makes c1 − c2 a control-vs-control null (ADR 0022).
+    const twin2: ControlTwin | null = triad ? { sf: shardFactors(gpu, s.ctx), loadingId: gpu } : null;
     const contaminated = plan.contaminated.has(gpu);
     // 'control' mode makes the TREATMENT clean (the fault moves to the control); else treatment is normal.
     const treatmentFaults = plan.mode === 'control' && contaminated ? NO_FAULTS : s.applier;
-    // a contaminated control carries the TREATMENT's fault (faultId=gpu), keeping its own idiosyncratic noise.
+    // a contaminated control carries the TREATMENT's fault (faultId=gpu) on c1 only, keeping its own noise.
     const controlFaults = contaminated ? s.applier : NO_FAULTS;
     for (const counter of SELECTED_COUNTERS) {
       await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, treatmentFaults, undefined, undefined, tailDf));
       // Matched control twin: shared factor instances + loadings, own idiosyncratic noise; NO_FAULTS unless
       // contaminated (ADR 0021 validation). Twin shares the treatment's tail model — fair like-for-like null.
       if (twin) await emitRow(cId, counter.name, counterTicks(s.seed, cId, counter, s.ctx, s.graph, controlFaults, undefined, twin, tailDf, gpu));
+      if (twin2) await emitRow(c2Id, counter.name, counterTicks(s.seed, c2Id, counter, s.ctx, s.graph, NO_FAULTS, undefined, twin2, tailDf));
     }
   }
 }
@@ -376,11 +398,13 @@ function factorsDoc(s: Scenario) {
   if (s.config.factorsHidden) {
     return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, controlArm, factorsHidden: true };
   }
+  const triad = triadEnabled(s);
   const membership: Record<string, ReturnType<typeof shardFactors>> = {};
   for (const gpu of s.gpuIds) {
     const sf = shardFactors(gpu, s.ctx);
     membership[gpu] = sf;
     if (controlArm) membership[controlIdOf(gpu)] = sf; // twin shares the treatment's factor instances
+    if (triad) membership[controlId2Of(gpu)] = sf;     // second matched twin (ADR 0022)
   }
   return { T: s.T, dt_s: s.dt_s, counters: SELECTED_COUNTERS, membership, controlArm, factorsHidden: false };
 }
@@ -390,10 +414,14 @@ function factorsDoc(s: Scenario) {
 // so Tessera's control-twin validity detector can be scored (off by default → both lists empty + mode null).
 function controlDoc(s: Scenario) {
   const plan = contaminationPlan(s);
+  const triad = triadEnabled(s);
   return {
     T: s.T,
     dt_s: s.dt_s,
-    pairs: s.gpuIds.map((g) => ({ treatment: g, control: controlIdOf(g) })),
+    triad,
+    pairs: s.gpuIds.map((g) => (triad
+      ? { treatment: g, control: controlIdOf(g), control2: controlId2Of(g) }
+      : { treatment: g, control: controlIdOf(g) })),
     contamination: { mode: plan.mode, shards: [...plan.contaminated].sort() },
     decorrelated: [...plan.decorrelated].sort(),
   };
