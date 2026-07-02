@@ -6,6 +6,13 @@ not be graded against its own modelling assumptions. Everything here is implemen
 in `src/harness/evaluation.ts` (detector-independent — it imports no detection
 code) and exercised by `test/q-r12…q-r15`.
 
+> **Honest boundary on "owns the yardstick":** code-level independence (the scorer imports no
+> detection code) is real, but *statistical* independence is not — the harness's telemetry comes
+> from the same linear-factor + OU model family whose structure the detector's residualization
+> assumes, and the "factors-hidden" adversarial path recovers factors via PCA, which is optimal
+> for exactly that low-rank structure. Scores here demonstrate internal consistency at scale,
+> not performance on out-of-family (real-cluster) telemetry.
+
 This contract reflects the 2021–2026 literature review in `REALISM-PLAN.md`
 (addendum). The headline rules:
 
