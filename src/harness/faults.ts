@@ -60,6 +60,20 @@ export interface FaultTopo {
   podIds: string[];
 }
 
+// CS_FAULT_MAG="lo:hi" — override the gpu-level mean-shift/drift magnitude range (noise-sd units;
+// default 4:8). Env-only (like CS_CONTAMINATE), off by default so existing runs are byte-identical.
+// Lets the consumer sweep SMALL fault magnitudes (e.g. "1:3") for power/recall curves instead of the
+// easy 4–8σ default (Tessera 2026-07-02 audit F12: recall headlines were measured on 4–8σ only).
+function gpuMagRange(): [number, number] {
+  const env = process.env.CS_FAULT_MAG;
+  if (!env) return [4, 8];
+  const [lo, hi] = env.split(':').map(Number);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo <= 0 || hi < lo) {
+    throw new Error(`bad CS_FAULT_MAG: ${env} (want "lo:hi" with 0 < lo <= hi)`);
+  }
+  return [lo, hi];
+}
+
 export function generateFaults(topo: FaultTopo, opts: FaultOpts): FaultSet {
   const { seed, T, dt_s, baseTs } = opts;
   const windowDur = Math.max((T - 1) * dt_s, dt_s);
@@ -103,7 +117,7 @@ export function generateFaults(topo: FaultTopo, opts: FaultOpts): FaultSet {
     else if (type === 'detachment') {
       magnitude = 1;
       detach_factor = level === 'pod' ? 'fabric' : level === 'cdu' ? 'cool' : 'job';
-    } else if (level === 'gpu') magnitude = rng.range(4, 8); // in noise-sd units
+    } else if (level === 'gpu') { const [lo, hi] = gpuMagRange(); magnitude = rng.range(lo, hi); } // noise-sd units
     else magnitude = rng.range(2, 4); // in factor-sd units (scaled by λ downstream)
     labels.push({
       fault_id: `fault-${labels.length}`,
