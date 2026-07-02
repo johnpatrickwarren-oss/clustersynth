@@ -8,7 +8,7 @@ Deterministic `TopologySnapshot`-shaped JSON at four order-of-magnitude scale ti
 
 ```bash
 pnpm install
-pnpm test                              # 27 tests, ~700ms
+pnpm test                              # 94 test cases across 19 suites (as of 2026-07-02)
 pnpm fixtures                          # regenerate fixtures/ (S0–S2; idempotent)
 pnpm cli gb200 s0                       # emit JSON to stdout
 pnpm cli gb300 s3 --out big.json        # 72,000-GPU GB300 cluster (~0.5s)
@@ -59,7 +59,7 @@ S0–S3 are flat-cluster scale tiers, each exactly 10× the previous on GPU coun
 | `gpu_shard` | 72 | Blackwell GPUs — B200 (GB200) or B300 (GB300) |
 | `nic` | 72 | ConnectX-7 (GB200) or ConnectX-8 (GB300), 1 per GPU |
 
-Per rack: **217 nodes, 1,026 edges.** Per pod (S1+): adds 1 `pod` + 2 `leaf_switch` + 10 `tor_switch`. Per cluster (S2+): adds 1 `cluster` + 4 `spine_switch`.
+Per rack: **217 nodes, 1,026 edges.** Per pod (S1+): adds 1 `pod` + 2 `leaf_switch` + 10 `tor_switch`. Per cluster (S1+): adds 1 `cluster`; at S2+ also 4 `spine_switch` (only spines are S2+).
 
 ## GB200 vs GB300
 
@@ -140,8 +140,9 @@ pnpm cli scenario scenario.json --out-dir out/
 # out/labels.json     fault ground-truth (shard/cdu/pod, onset, type, blast radius)
 # out/counters.ndjson per-shard counter time-series (streamed; flat memory)
 
-# CS_COUNTERS restricts generation to a counter subset (5x less volume per dropped
-# counter) — the path to a long-duration, high-cadence run for one DCGM counter:
+# CS_COUNTERS restricts generation to a counter subset. There are 5 counters, so
+# dropping one cuts per-shard volume ~20%; restricting to a single counter cuts it
+# 5x — the path to a long-duration, high-cadence run for one DCGM counter:
 CS_COUNTERS=gpu_temp_c pnpm cli scenario scenario.json --out-dir out/
 
 # CS_SHARD_RANGE="start:count" emits only gpuIds[start, start+count) — split a tier's
