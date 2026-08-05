@@ -39,6 +39,8 @@ import { generateChurn } from './evolution.js';
 import { NO_FAULTS } from './types.js';
 import type { FaultApplier, FaultLabel } from './types.js';
 import { rngFor } from '../common/rng.js';
+import { isActive, severityOf, tailDfForSeverity } from './out-of-family.js';
+import type { OutOfFamilySpec } from './out-of-family.js';
 
 export interface ScenarioConfig {
   family: Family;
@@ -74,6 +76,12 @@ export interface ScenarioConfig {
   // freedom (integer ≥ 3), standardized to preserve the OU stationary variance — only
   // kurtosis rises. Stresses detector robustness to non-Gaussian telemetry (cf. FarmTest).
   heavyTails?: { df: number };
+  // The OUT-OF-FAMILY regime (register item C31, PREREG-out-of-family.md): severity
+  // knobs on three violations of the linear-factor + OU family the evaluation
+  // contract discloses its telemetry comes from. All-zero / absent ⇒ the shipped
+  // in-family generator, byte-for-byte. `heavyTails` here is the severity form of
+  // the `heavyTails.df` knob above — set one or the other, not both.
+  outOfFamily?: OutOfFamilySpec;
   faults?:
     | false
     | {
@@ -90,6 +98,9 @@ export interface Scenario {
   T: number;
   dt_s: number;
   baseTs: number;
+  // Resolved Student-t d.o.f. for the idiosyncratic innovations: either the direct
+  // `heavyTails.df` knob or the out-of-family `heavyTails` severity. undefined ⇒ Gaussian.
+  tailDf?: number;
   topology: TopologySnapshot; // enriched: base + shared infra
   gpuIds: string[];
   ctx: FactorContext;
@@ -131,6 +142,16 @@ export function buildScenario(config: ScenarioConfig): Scenario {
   if (config.heavyTails && (!Number.isInteger(config.heavyTails.df) || config.heavyTails.df < 3)) {
     throw new Error(`heavyTails.df must be an integer ≥ 3 (finite variance), got ${config.heavyTails.df}`);
   }
+  // Out-of-family regime: validate every severity, then resolve the heavy-tail axis
+  // onto the shipped d.o.f. path. Two ways to say the same thing is a defect, so
+  // setting both forms is an error rather than a silent precedence rule.
+  const oof = config.outOfFamily;
+  for (const axis of ['nonlinear', 'heavyTails', 'switching'] as const) severityOf(oof?.[axis], axis);
+  const oofTailSeverity = severityOf(oof?.heavyTails, 'heavyTails');
+  if (oofTailSeverity > 0 && config.heavyTails) {
+    throw new Error('set either heavyTails.df or outOfFamily.heavyTails (severity), not both');
+  }
+  const tailDf = oofTailSeverity > 0 ? tailDfForSeverity(oofTailSeverity) : config.heavyTails?.df;
 
   // base topology, then enrich with shared infrastructure (Track 1B)
   const topology = buildClusterShaped({
@@ -178,6 +199,7 @@ export function buildScenario(config: ScenarioConfig): Scenario {
     },
     dt_s,
     baseTs,
+    oof,
   );
 
   let labels: FaultLabel[] = [];
@@ -204,6 +226,7 @@ export function buildScenario(config: ScenarioConfig): Scenario {
     T,
     dt_s,
     baseTs,
+    tailDf,
     topology,
     gpuIds,
     ctx,
@@ -333,7 +356,7 @@ export async function streamCounters(
   const dtOut = downsampleTo ?? s.dt_s;
   const step = Math.max(1, Math.round(dtOut / s.dt_s));
   const controlArm = controlArmEnabled(s);
-  const tailDf = s.config.heavyTails?.df;
+  const tailDf = s.tailDf;
 
   // Emit one shard-counter row from a tick generator (downsampling + backpressure + flushing).
   const emitRow = async (shardId: string, counterName: string, ticks: Generator<number>): Promise<void> => {
@@ -495,8 +518,17 @@ export async function writeScenario(s: Scenario, outDir: string): Promise<string
   });
   paths.push(allocPath);
 
+  // The out-of-family regime is provenance, so it rides with labels.json — which is
+  // SCORING-ONLY and never an input to detection. Putting it in factors.json would
+  // hand the detector its own difficulty setting. Absent when the run is in-family,
+  // so an in-family bundle is byte-identical to what shipped before C31.
   const labelsPath = join(outDir, 'labels.json');
-  await writeJson(labelsPath, { faults: s.labels });
+  await writeJson(
+    labelsPath,
+    isActive(s.config.outOfFamily)
+      ? { faults: s.labels, outOfFamily: { ...s.config.outOfFamily, resolvedTailDf: s.tailDf ?? null } }
+      : { faults: s.labels },
+  );
   paths.push(labelsPath);
 
   if (controlArmEnabled(s)) {

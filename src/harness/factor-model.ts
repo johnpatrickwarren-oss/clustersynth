@@ -23,6 +23,15 @@ import { rngFor, type Prng } from '../common/rng.js';
 import { rackOf, podOf, gpuRackIndex } from '../common/ids.js';
 import type { CounterSpec, FactorKind, ShardFactors, FaultApplier } from './types.js';
 import { NO_FAULTS } from './types.js';
+import {
+  isActive,
+  nonlinearBasis,
+  nonlinearMix,
+  nonlinearValue,
+  severityOf,
+  switchingPlan,
+} from './out-of-family.js';
+import type { NonlinearBasis, OutOfFamilySpec } from './out-of-family.js';
 
 // Per-counter physical timescales via tauIdio (s) + the dominant factor's τ below.
 // temperature: slow (thermal inertia); power: seconds; sm/util: sub-second/spiky;
@@ -123,6 +132,10 @@ export function factorSeries(
   modes: NonstationarityModes,
   dt_s: number,
   baseTs: number,
+  // Out-of-family axis S (C31): a two-state hidden Markov modulation of THIS
+  // factor's own OU dynamics. undefined / switching = 0 ⇒ the shipped single-OU
+  // path, byte-identical (the switching PRNG stream is never even constructed).
+  oof?: OutOfFamilySpec,
 ): number[] {
   const r = rngFor(seed, `factor:${factorId}`);
   const tau = FACTOR_TAU[kind];
@@ -130,9 +143,22 @@ export function factorSeries(
   const innov = Math.sqrt(1 - phi * phi); // σ_stat = 1
   const f = new Array<number>(T);
   let x = r.normal(); // stationary init N(0,1)
-  for (let t = 0; t < T; t++) {
-    x = phi * x + r.normal(0, innov);
-    f[t] = x;
+  const sw = switchingPlan(seed, factorId, tau, dt_s, oof?.switching ?? 0);
+  if (sw) {
+    // Regime-switching dynamics: state 0 is the shipped OU, state 1 is faster and
+    // more volatile. Breaks stationarity of the common mode and the single-φ
+    // premise the AR(1) machinery is exact for.
+    let state = 0;
+    for (let t = 0; t < T; t++) {
+      if (sw.rng.float() < sw.pSwitch) state = 1 - state;
+      x = sw.phi[state]! * x + r.normal(0, sw.innov[state]!);
+      f[t] = x;
+    }
+  } else {
+    for (let t = 0; t < T; t++) {
+      x = phi * x + r.normal(0, innov);
+      f[t] = x;
+    }
   }
   const windowDur = Math.max((T - 1) * dt_s, dt_s);
 
@@ -177,6 +203,11 @@ export interface FactorGraph {
   T: number;
   dt_s: number;
   baseTs: number;
+  // Out-of-family regime (C31). Absent / all-zero ⇒ the shipped in-family generator.
+  oof?: OutOfFamilySpec;
+  // Axis N basis per factor, built once when nonlinear > 0 (lazy: absent otherwise
+  // so the in-family path allocates nothing extra).
+  nlBasis?: Map<string, NonlinearBasis>;
 }
 
 export function buildFactorGraph(
@@ -186,12 +217,13 @@ export function buildFactorGraph(
   factors: { cdus: string[]; feeds: string[]; pods: string[]; jobs: string[] },
   dt_s: number,
   baseTs: number,
+  oof?: OutOfFamilySpec,
 ): FactorGraph {
   const series = new Map<string, number[]>();
   const kindOf = new Map<string, FactorKind>();
   const add = (ids: string[], kind: FactorKind) => {
     for (const id of ids) {
-      series.set(id, factorSeries(seed, id, kind, T, modes, dt_s, baseTs));
+      series.set(id, factorSeries(seed, id, kind, T, modes, dt_s, baseTs, oof));
       kindOf.set(id, kind);
     }
   };
@@ -199,7 +231,12 @@ export function buildFactorGraph(
   add(factors.feeds, 'power');
   add(factors.pods, 'fabric');
   add(factors.jobs, 'job');
-  return { series, kindOf, T, dt_s, baseTs };
+  const graph: FactorGraph = { series, kindOf, T, dt_s, baseTs };
+  if (isActive(oof)) graph.oof = oof;
+  if (severityOf(oof?.nonlinear, 'nonlinear') > 0) {
+    graph.nlBasis = new Map([...series].map(([id, f]) => [id, nonlinearBasis(f)]));
+  }
+  return graph;
 }
 
 // A MATCHED CONTROL TWIN of a treatment shard: it loads on the treatment's EXACT factor instances
@@ -249,6 +286,18 @@ export function* counterTicks(
   const lam = new Map<FactorKind, number>();
   for (const [kind] of factorIdByKind) lam.set(kind, lambdaOf(seed, loadingId, counter, kind, heterogeneity));
 
+  // Out-of-family axis N: this shard-counter's mix of the saturation/rectification
+  // directions, one per factor kind. Keyed by loadingId, so a matched control twin
+  // shares the treatment's transformed common mode exactly and the spatial-null
+  // contrast still cancels. Built only when nonlinear > 0.
+  const nl = severityOf(graph.oof?.nonlinear, 'nonlinear');
+  const nlMix =
+    nl > 0
+      ? new Map(
+          factorIdByKind.map(([kind]) => [kind, nonlinearMix(seed, loadingId, counter.name, kind)]),
+        )
+      : null;
+
   const baseline =
     counter.base + rngFor(seed, `baseline:${gpuId}:${counter.name}`).normal(0, counter.baseSd);
 
@@ -266,7 +315,10 @@ export function* counterTicks(
       if (faults.detached(faultLookupId, kind, tSec)) continue; // detachment fault
       const lambda = lam.get(kind)!;
       if (lambda === 0) continue;
-      y += lambda * graph.series.get(factorId)![t]!;
+      const basis = nlMix ? graph.nlBasis?.get(factorId) : undefined;
+      y += lambda * (basis
+        ? nonlinearValue(basis, nlMix!.get(kind)!, nl, t)
+        : graph.series.get(factorId)![t]!);
     }
     // Gaussian innovation by default; heavy-tailed (standardized Student-t) when
     // tailDf is set — same innovation variance, higher kurtosis only.

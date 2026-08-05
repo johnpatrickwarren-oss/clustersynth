@@ -71,6 +71,18 @@ export { buildScenario, writeScenario, streamCounters, controlIdOf, controlId2Of
 export type { ScenarioConfig, Scenario } from './harness/scenario.js';
 export { tStdT } from './harness/factor-model.js';
 export type { ControlTwin } from './harness/factor-model.js';
+// Out-of-family regime (C31) — the violation set, its severity knobs, and the
+// generative pieces they drive. See PREREG-out-of-family.md and EVALUATION.md.
+export {
+  isActive as outOfFamilyActive,
+  severityOf,
+  tailDfForSeverity,
+  switchingPlan,
+  nonlinearBasis,
+  nonlinearMix,
+  nonlinearValue,
+} from './harness/out-of-family.js';
+export type { OutOfFamilySpec, NonlinearBasis, SwitchingPlan } from './harness/out-of-family.js';
 // Track 4 — evaluation contract + reference statistical methods (detector-independent).
 export {
   jacobiEigen,
