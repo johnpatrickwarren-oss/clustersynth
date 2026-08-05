@@ -12,6 +12,10 @@ code) and exercised by `test/q-r12…q-r15`.
 > assumes, and the "factors-hidden" adversarial path recovers factors via PCA, which is optimal
 > for exactly that low-rank structure. Scores here demonstrate internal consistency at scale,
 > not performance on out-of-family (real-cluster) telemetry.
+>
+> **Measured since 2026-08-05** — see [Out-of-family regime](#out-of-family-regime) below. The
+> disclosure above is no longer only a disclaimer: the harness can now violate its own family in
+> three controlled directions and the cost has been scored.
 
 This contract reflects the 2021–2026 literature review in `REALISM-PLAN.md`
 (addendum). The headline rules:
@@ -103,6 +107,72 @@ Report these alongside any detector. If it cannot beat them, it is not detecting
 - **`randomScoreBaseline(seed, ids)`** — uniform-random score per shard.
 - **`magnitudeScoreBaseline(series)`** — max |y − median|, the "just threshold the
   signal" detector.
+
+## Out-of-family regime
+
+*Register item C31. Pre-registration: `PREREG-out-of-family.md` (committed before any generator
+code existed). Scored run and full surface: `runs/out-of-family/REPORT.md`, machine-checked by
+`analysis/check-report.mjs`. Generator: `src/harness/out-of-family.ts`; guarantees tested in
+`test/q-r16`.*
+
+The honest boundary above says the telemetry comes from the same linear-factor + OU family the
+detector's residualization assumes. This regime **breaks that family on purpose**, in three named
+directions, each behind a severity knob `s ∈ [0,1]`. `s = 0` is the shipped generator
+byte-for-byte, so the whole in-family corpus stays valid.
+
+```ts
+buildScenario({ ..., outOfFamily: { nonlinear: 0.5, heavyTails: 0.75, switching: 0.25 } })
+```
+
+| axis | assumption broken | construction |
+|---|---|---|
+| `nonlinear` | the factor response is linear and identically shaped for every shard | the shard's response becomes `√(1−s²)·f + s·(u·saturation + v·rectification)`, with `(u,v)` fixed per (shard, counter, factor kind). The two nonlinear directions are Gram–Schmidt'd against `f` **over the window**, so window mean and variance of the common mode are preserved *exactly* — and the remainder is orthogonal to the true factor series, which is what makes the violation reach the **oracle** regime |
+| `heavyTails` | idiosyncratic innovations are Gaussian | standardized Student-t innovations at `df = round(3 + 12(1−s))`; the shipped `heavyTails.df` mechanism, adopted as one arm. Stationary variance preserved, only kurtosis rises |
+| `switching` | each factor is one stationary OU with one `φ` | two-state hidden Markov modulation of the factor's own dynamics (state 1: `τ/4`, stationary sd `1+3s`), hazard `s/300` per second |
+
+The scorer and the contract are **unchanged**. `src/harness/evaluation.ts` was not edited for this;
+the sweep only calls it. The regime is recorded in `labels.json` — which is scoring-only and never
+a detector input — so a detector cannot read its own difficulty setting.
+
+**A severity is not a small number.** It is a fraction of the *common-mode* sd, while fault
+magnitudes are quoted in *idiosyncratic noise* sd, and for `gpu_temp_c` the common mode measures
+14.5 oracle-residual sd against a fault midpoint of 6. `nonlinear = 0.25` therefore injects a
+contaminant 60% the size of the fault being hunted. Read the exchange rate in the report before
+reading a surface.
+
+### What the scored run found
+
+16 seeds, 144 shards, `q = 0.10`, matched fault sets. Headline numbers, full table in the report:
+
+- **Nonlinear loadings destroy the oracle regime** — power 74% → 3%, FPR near nominal throughout.
+  The oracle goes blind rather than wrong: the contaminant inflates the global long-run variance
+  the CUSUM is scaled by.
+- **The adversarial regime overtakes the oracle out-of-family** — at `nonlinear = 1`,
+  factors-hidden holds 54% power against the oracle's 3%, reversing the in-family ordering. `K̂`
+  rises 1.56 → 6.38: PCA absorbs structure the true factor series cannot explain.
+- **Heavy tails are a weak violation** — nothing moves until `df = 3`. Reported as a weak
+  violation, not as robustness.
+- **The `switching` axis result does not stand.** Every detector improved, and the diagnostic says
+  why: as pre-registered the axis inflates common-mode variance (14.5 → 41.2), which makes factor
+  estimation *easier*. The design confounds "switching" with "stronger common mode". Recorded, not
+  repaired.
+- **Three of the four reference detectors fall below the mandatory random baseline** (11% recall)
+  at high nonlinear severity. Under rule 2 above they are not detecting.
+- **The in-family baseline is itself a finding**: `hidden-cusum-bh` realizes 84% FDR at `q = 0.10`,
+  because `estimateNumFactors` recovers `K̂ ≈ 1.6` against four factor kinds. Pre-existing, exposed
+  by this run's baseline column, not introduced by it.
+
+### What this regime still cannot claim
+
+**Out-of-family synthetic is not real-cluster telemetry.** Breaking three named assumptions of one
+generative family produces data outside *that* family. It does not produce data inside the
+distribution of a real GB200 fleet, and nothing measured here licenses a transfer claim. The
+surface says how fast a guarantee decays when an assumption is violated *in a direction the harness
+author chose* — strictly weaker than external validity, and exactly as strong as that choice. The
+`switching` axis is the standing demonstration that the choice can be wrong.
+
+Escaping synthetic circularity still requires real telemetry. This regime narrows the gap; it does
+not close it.
 
 ## ⛔ Banned: point-adjustment
 

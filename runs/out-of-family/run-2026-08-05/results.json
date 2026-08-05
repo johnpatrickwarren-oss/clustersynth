@@ -1,0 +1,922 @@
+{
+  "register": "C31",
+  "runId": "2026-08-05",
+  "prereg": "PREREG-out-of-family.md",
+  "contract": "EVALUATION.md",
+  "codeSha": "31683a53e025950089ee84b0fec0d7952701b753",
+  "dirty": true,
+  "command": "npx tsx src/oof-sweep.ts --run-id 2026-08-05",
+  "node": "v25.9.0",
+  "seedScheme": "SEEDS[i] = 31000 + i, i ∈ [0,16)",
+  "substrate": "clustersynth in-repo generator (no external data; compute-only)",
+  "diagnostics": {
+    "faultMidpointInNoiseSd": 6
+  },
+  "run": {
+    "seeds": [
+      31000,
+      31001,
+      31002,
+      31003,
+      31004,
+      31005,
+      31006,
+      31007,
+      31008,
+      31009,
+      31010,
+      31011,
+      31012,
+      31013,
+      31014,
+      31015
+    ],
+    "counter": "gpu_temp_c",
+    "q": 0.1,
+    "base": {
+      "family": "gb200",
+      "pods": 1,
+      "racksPerPod": 2,
+      "window": {
+        "steps": 240
+      },
+      "nonstationarity": [
+        "thermal",
+        "diurnal",
+        "regime"
+      ]
+    },
+    "faults": {
+      "rate": 0.15,
+      "levels": [
+        "gpu"
+      ],
+      "types": [
+        "mean_shift",
+        "drift"
+      ],
+      "sharedFaults": 0
+    },
+    "detectors": [
+      "oracle-cusum-bh",
+      "hidden-cusum-bh",
+      "hidden-cusum-ebh",
+      "hidden-ar1-halves-bh",
+      "baseline-random",
+      "baseline-magnitude"
+    ]
+  },
+  "cells": [
+    {
+      "cell": "in-family",
+      "axis": "none",
+      "severity": 0,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.5625,
+      "khatFault": 1.1875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 14.477141888630703,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0,
+          "fdr": 0,
+          "power": 0.738562091503268,
+          "rejNull": 0,
+          "rejFault": 113
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.12456597222222222,
+          "fdr": 0.8419864559819413,
+          "power": 0.45751633986928103,
+          "rejNull": 287,
+          "rejFault": 443
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.029079861111111112,
+          "fdr": 0.8357142857142857,
+          "power": 0.1503267973856209,
+          "rejNull": 67,
+          "rejFault": 140
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.04904513888888889,
+          "fdr": 0.9361022364217252,
+          "power": 0.13071895424836602,
+          "rejNull": 113,
+          "rejFault": 313
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        }
+      }
+    },
+    {
+      "cell": "nonlinear@0.25",
+      "axis": "nonlinear",
+      "severity": 0.25,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1,
+      "khatFault": 1,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 3.8795778321177825,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.020833333333333332,
+          "fdr": 0.7301587301587301,
+          "power": 0.1111111111111111,
+          "rejNull": 48,
+          "rejFault": 63
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.17274305555555555,
+          "fdr": 0.915,
+          "power": 0.2222222222222222,
+          "rejNull": 398,
+          "rejFault": 400
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.06076388888888889,
+          "fdr": 0.8958333333333334,
+          "power": 0.09803921568627451,
+          "rejNull": 140,
+          "rejFault": 144
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.16319444444444445,
+          "fdr": 0.9400544959128065,
+          "power": 0.1437908496732026,
+          "rejNull": 376,
+          "rejFault": 367
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.10457516339869281,
+          "recall": 0.10457516339869281
+        }
+      }
+    },
+    {
+      "cell": "nonlinear@0.5",
+      "axis": "nonlinear",
+      "severity": 0.5,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 5.5,
+      "khatFault": 3,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 1.761002309387965,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.024305555555555556,
+          "fdr": 0.8833333333333333,
+          "power": 0.0457516339869281,
+          "rejNull": 56,
+          "rejFault": 60
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.0763888888888889,
+          "fdr": 0.8311688311688312,
+          "power": 0.33986928104575165,
+          "rejNull": 176,
+          "rejFault": 308
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.013454861111111112,
+          "fdr": 0.7301587301587301,
+          "power": 0.1111111111111111,
+          "rejNull": 31,
+          "rejFault": 63
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.03428819444444445,
+          "fdr": 0.8978102189781022,
+          "power": 0.0915032679738562,
+          "rejNull": 79,
+          "rejFault": 137
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        }
+      }
+    },
+    {
+      "cell": "nonlinear@0.75",
+      "axis": "nonlinear",
+      "severity": 0.75,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 5,
+      "khatFault": 4.1875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 0.9344617838299804,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.025607638888888888,
+          "fdr": 0.9152542372881356,
+          "power": 0.032679738562091505,
+          "rejNull": 59,
+          "rejFault": 59
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.0920138888888889,
+          "fdr": 0.7862595419847328,
+          "power": 0.3660130718954248,
+          "rejNull": 212,
+          "rejFault": 262
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.01171875,
+          "fdr": 0.6285714285714286,
+          "power": 0.08496732026143791,
+          "rejNull": 27,
+          "rejFault": 35
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.04991319444444445,
+          "fdr": 0.9017857142857143,
+          "power": 0.0718954248366013,
+          "rejNull": 115,
+          "rejFault": 112
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        }
+      }
+    },
+    {
+      "cell": "nonlinear@1",
+      "axis": "nonlinear",
+      "severity": 1,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 6.375,
+      "khatFault": 4.75,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 0.2596660484213462,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.025173611111111112,
+          "fdr": 0.9137931034482759,
+          "power": 0.032679738562091505,
+          "rejNull": 58,
+          "rejFault": 58
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.036458333333333336,
+          "fdr": 0.5699481865284974,
+          "power": 0.5424836601307189,
+          "rejNull": 84,
+          "rejFault": 193
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.0008680555555555555,
+          "fdr": 0.05263157894736842,
+          "power": 0.23529411764705882,
+          "rejNull": 2,
+          "rejFault": 38
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.021701388888888888,
+          "fdr": 0.9047619047619048,
+          "power": 0.0392156862745098,
+          "rejNull": 50,
+          "rejFault": 63
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.08496732026143791,
+          "recall": 0.08496732026143791
+        }
+      }
+    },
+    {
+      "cell": "heavyTails@0.25",
+      "axis": "heavyTails",
+      "severity": 0.25,
+      "resolvedTailDf": 12,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.5625,
+      "khatFault": 1.1875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 14.367855847580586,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.00043402777777777775,
+          "fdr": 0.03773584905660377,
+          "power": 0.6666666666666666,
+          "rejNull": 1,
+          "rejFault": 106
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.1171875,
+          "fdr": 0.8454545454545455,
+          "power": 0.4444444444444444,
+          "rejNull": 270,
+          "rejFault": 440
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.024305555555555556,
+          "fdr": 0.8278688524590164,
+          "power": 0.13725490196078433,
+          "rejNull": 56,
+          "rejFault": 122
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.047309027777777776,
+          "fdr": 0.9437086092715232,
+          "power": 0.1111111111111111,
+          "rejNull": 109,
+          "rejFault": 302
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.11764705882352941,
+          "recall": 0.11764705882352941
+        }
+      }
+    },
+    {
+      "cell": "heavyTails@0.5",
+      "axis": "heavyTails",
+      "severity": 0.5,
+      "resolvedTailDf": 9,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.5625,
+      "khatFault": 1.1875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 14.116669557365672,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.00043402777777777775,
+          "fdr": 0.02608695652173913,
+          "power": 0.7320261437908496,
+          "rejNull": 1,
+          "rejFault": 115
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.12369791666666667,
+          "fdr": 0.8535469107551488,
+          "power": 0.41830065359477125,
+          "rejNull": 285,
+          "rejFault": 437
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.03211805555555555,
+          "fdr": 0.84251968503937,
+          "power": 0.13071895424836602,
+          "rejNull": 74,
+          "rejFault": 127
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.040364583333333336,
+          "fdr": 0.9413793103448276,
+          "power": 0.1111111111111111,
+          "rejNull": 93,
+          "rejFault": 290
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.10457516339869281,
+          "recall": 0.10457516339869281
+        }
+      }
+    },
+    {
+      "cell": "heavyTails@0.75",
+      "axis": "heavyTails",
+      "severity": 0.75,
+      "resolvedTailDf": 6,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.5625,
+      "khatFault": 1.1875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 14.207745330463199,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0,
+          "fdr": 0.02586206896551724,
+          "power": 0.738562091503268,
+          "rejNull": 0,
+          "rejFault": 116
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.125,
+          "fdr": 0.8413793103448276,
+          "power": 0.45098039215686275,
+          "rejNull": 288,
+          "rejFault": 435
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.026475694444444444,
+          "fdr": 0.8296296296296296,
+          "power": 0.1503267973856209,
+          "rejNull": 61,
+          "rejFault": 135
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.050347222222222224,
+          "fdr": 0.9451612903225807,
+          "power": 0.1111111111111111,
+          "rejNull": 116,
+          "rejFault": 310
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        }
+      }
+    },
+    {
+      "cell": "heavyTails@1",
+      "axis": "heavyTails",
+      "severity": 1,
+      "resolvedTailDf": 3,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.4375,
+      "khatFault": 1.1875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 14.994153851841043,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.005208333333333333,
+          "fdr": 0.125,
+          "power": 0.7777777777777778,
+          "rejNull": 12,
+          "rejFault": 136
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.15147569444444445,
+          "fdr": 0.8534278959810875,
+          "power": 0.40522875816993464,
+          "rejNull": 349,
+          "rejFault": 423
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.04079861111111111,
+          "fdr": 0.8198198198198198,
+          "power": 0.13071895424836602,
+          "rejNull": 94,
+          "rejFault": 111
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.09635416666666667,
+          "fdr": 0.944078947368421,
+          "power": 0.1111111111111111,
+          "rejNull": 222,
+          "rejFault": 304
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.10457516339869281,
+          "recall": 0.10457516339869281
+        }
+      }
+    },
+    {
+      "cell": "switching@0.25",
+      "axis": "switching",
+      "severity": 0.25,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 2.125,
+      "khatFault": 1.3125,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 16.907870535928478,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0,
+          "fdr": 0,
+          "power": 0.8169934640522876,
+          "rejNull": 0,
+          "rejFault": 125
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.1401909722222222,
+          "fdr": 0.848297213622291,
+          "power": 0.6405228758169934,
+          "rejNull": 323,
+          "rejFault": 646
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.046875,
+          "fdr": 0.8181818181818182,
+          "power": 0.2875816993464052,
+          "rejNull": 108,
+          "rejFault": 242
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.1032986111111111,
+          "fdr": 0.9330357142857143,
+          "power": 0.19607843137254902,
+          "rejNull": 238,
+          "rejFault": 448
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.13071895424836602,
+          "recall": 0.13071895424836602
+        }
+      }
+    },
+    {
+      "cell": "switching@0.5",
+      "axis": "switching",
+      "severity": 0.5,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 2.625,
+      "khatFault": 1.6875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 29.39794865691745,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0,
+          "fdr": 0.007936507936507936,
+          "power": 0.8169934640522876,
+          "rejNull": 0,
+          "rejFault": 126
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.078125,
+          "fdr": 0.8404074702886248,
+          "power": 0.6143790849673203,
+          "rejNull": 180,
+          "rejFault": 589
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.01953125,
+          "fdr": 0.7878787878787878,
+          "power": 0.3202614379084967,
+          "rejNull": 45,
+          "rejFault": 231
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.053385416666666664,
+          "fdr": 0.9267241379310345,
+          "power": 0.2222222222222222,
+          "rejNull": 123,
+          "rejFault": 464
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.11764705882352941,
+          "recall": 0.11764705882352941
+        }
+      }
+    },
+    {
+      "cell": "switching@0.75",
+      "axis": "switching",
+      "severity": 0.75,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 3.375,
+      "khatFault": 2.25,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 24.155764796144375,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.00043402777777777775,
+          "fdr": 0.016129032258064516,
+          "power": 0.7973856209150327,
+          "rejNull": 1,
+          "rejFault": 124
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.008680555555555556,
+          "fdr": 0.7681159420289855,
+          "power": 0.6274509803921569,
+          "rejNull": 20,
+          "rejFault": 414
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.001736111111111111,
+          "fdr": 0.7006802721088435,
+          "power": 0.2875816993464052,
+          "rejNull": 4,
+          "rejFault": 147
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0,
+          "fdr": 0.9173913043478261,
+          "power": 0.12418300653594772,
+          "rejNull": 0,
+          "rejFault": 230
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.09803921568627451,
+          "recall": 0.09803921568627451
+        }
+      }
+    },
+    {
+      "cell": "switching@1",
+      "axis": "switching",
+      "severity": 1,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 3.6875,
+      "khatFault": 2.8125,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 41.15677029734112,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0,
+          "fdr": 0.007633587786259542,
+          "power": 0.8496732026143791,
+          "rejNull": 0,
+          "rejFault": 131
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0,
+          "fdr": 0.38414634146341464,
+          "power": 0.6601307189542484,
+          "rejNull": 0,
+          "rejFault": 164
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0,
+          "fdr": 0.06666666666666667,
+          "power": 0.27450980392156865,
+          "rejNull": 0,
+          "rejFault": 45
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0,
+          "fdr": 0.927536231884058,
+          "power": 0.032679738562091505,
+          "rejNull": 0,
+          "rejFault": 69
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.0915032679738562,
+          "recall": 0.0915032679738562
+        }
+      }
+    },
+    {
+      "cell": "nonlinear@0.02",
+      "axis": "nonlinear",
+      "severity": 0.02,
+      "exploratory": true,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.5625,
+      "khatFault": 1.1875,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 14.002624350840287,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0,
+          "fdr": 0,
+          "power": 0.6666666666666666,
+          "rejNull": 0,
+          "rejFault": 102
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.1306423611111111,
+          "fdr": 0.8367346938775511,
+          "power": 0.47058823529411764,
+          "rejNull": 301,
+          "rejFault": 441
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.024305555555555556,
+          "fdr": 0.8211382113821138,
+          "power": 0.1437908496732026,
+          "rejNull": 56,
+          "rejFault": 123
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.045572916666666664,
+          "fdr": 0.9401993355481728,
+          "power": 0.11764705882352941,
+          "rejNull": 105,
+          "rejFault": 301
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        }
+      }
+    },
+    {
+      "cell": "nonlinear@0.05",
+      "axis": "nonlinear",
+      "severity": 0.05,
+      "exploratory": true,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.1875,
+      "khatFault": 1.0625,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 11.679451399284789,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.0026041666666666665,
+          "fdr": 0.06896551724137931,
+          "power": 0.5294117647058824,
+          "rejNull": 6,
+          "rejFault": 87
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.1701388888888889,
+          "fdr": 0.8786008230452675,
+          "power": 0.38562091503267976,
+          "rejNull": 392,
+          "rejFault": 486
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.046875,
+          "fdr": 0.8627450980392157,
+          "power": 0.13725490196078433,
+          "rejNull": 108,
+          "rejFault": 153
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.1284722222222222,
+          "fdr": 0.9459459459459459,
+          "power": 0.1437908496732026,
+          "rejNull": 296,
+          "rejFault": 407
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.11764705882352941,
+          "recall": 0.11764705882352941
+        }
+      }
+    },
+    {
+      "cell": "nonlinear@0.1",
+      "axis": "nonlinear",
+      "severity": 0.1,
+      "exploratory": true,
+      "resolvedTailDf": null,
+      "seeds": 16,
+      "nShards": 144,
+      "khatNull": 1.0625,
+      "khatFault": 1.0625,
+      "nNull": 2304,
+      "nPositive": 153,
+      "commonSdInResidualSd": 8.268018634684887,
+      "detectors": {
+        "oracle-cusum-bh": {
+          "fpr": 0.018229166666666668,
+          "fdr": 0.4090909090909091,
+          "power": 0.33986928104575165,
+          "rejNull": 42,
+          "rejFault": 88
+        },
+        "hidden-cusum-bh": {
+          "fpr": 0.1792534722222222,
+          "fdr": 0.8807785888077859,
+          "power": 0.3202614379084967,
+          "rejNull": 413,
+          "rejFault": 411
+        },
+        "hidden-cusum-ebh": {
+          "fpr": 0.061197916666666664,
+          "fdr": 0.8992805755395683,
+          "power": 0.0915032679738562,
+          "rejNull": 141,
+          "rejFault": 139
+        },
+        "hidden-ar1-halves-bh": {
+          "fpr": 0.15538194444444445,
+          "fdr": 0.9497206703910615,
+          "power": 0.11764705882352941,
+          "rejNull": 358,
+          "rejFault": 358
+        }
+      },
+      "baselines": {
+        "baseline-random": {
+          "precision": 0.1111111111111111,
+          "recall": 0.1111111111111111
+        },
+        "baseline-magnitude": {
+          "precision": 0.11764705882352941,
+          "recall": 0.11764705882352941
+        }
+      }
+    }
+  ]
+}
