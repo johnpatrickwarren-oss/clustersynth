@@ -31,7 +31,7 @@ import {
 } from './factor-model.js';
 import type { ControlTwin } from './factor-model.js';
 import type { FactorContext, FactorGraph, NonstationarityModes } from './factor-model.js';
-import { generateFaults } from './faults.js';
+import { generateFaults, buildApplier } from './faults.js';
 import { generateHealth } from './health.js';
 import type { HealthRecord } from './health.js';
 import { generateFabric } from './fabric.js';
@@ -60,8 +60,11 @@ export interface ScenarioConfig {
   nonstationarity?: Partial<NonstationarityModes> | Array<keyof NonstationarityModes>;
   infra?: SharedInfraOpts;
   // Emit a MATCHED CONTROL TWIN per GPU shard: same factor instances + loadings, independent
-  // idiosyncratic noise, NEVER faulted (a concurrent canary). Enables Tessera Mode B's spatial null
-  // (treatment − control cancels the common-mode exactly). Also honored via CS_CONTROL_ARM=1.
+  // idiosyncratic noise, never carrying a gpu-level fault (a concurrent canary). A cdu/pod fault is a
+  // factor perturbation of the domain the twin sits in, so the twin carries it with the treatment's λ
+  // (C73, 2026-09-04; before that the twin was fault-free at every level and a shared fault leaked into
+  // the contrast). Enables Tessera Mode B's spatial null (treatment − control cancels the common-mode
+  // exactly, shared faults included). Also honored via CS_CONTROL_ARM=1.
   controlArm?: boolean;
   // Emit a SECOND matched control twin per GPU (the ADR 0022 control triad). Implies controlArm. Also via
   // CS_TRIAD=1. Off by default. control.json then carries `control2` per pair.
@@ -273,7 +276,8 @@ export function controlIdOf(gpuId: string): string {
 
 // The SECOND matched control twin (Tessera ADR 0022 control triad). Like #ctrl, it shares the treatment's
 // factor instances + loadings (common-mode cancels in any within-triad contrast) but has its OWN independent
-// idiosyncratic noise and is never faulted — so c1 − c2 is a clean control-vs-control null.
+// idiosyncratic noise and never carries a gpu-level fault — so c1 − c2 is a clean control-vs-control null.
+// Both twins carry the domain's cdu/pod faults (C73), which keeps c1 − c2 null under a shared event too.
 export function controlId2Of(gpuId: string): string {
   return `${gpuId}#ctrl2`;
 }
@@ -304,6 +308,14 @@ function triadEnabled(s: Scenario): boolean {
 //                                 common-mode leaks into the contrast → non-comparability (Test A catches it).
 type ContamMode = 'both' | 'control' | null;
 interface ContaminationPlan { mode: ContamMode; contaminated: Set<string>; decorrelated: Set<string>; }
+
+// C73: the applier a control twin sees — the cdu/pod (shared-infra) labels only, looked up under the
+// TREATMENT's id so the realized delta uses the same λ the twin loads with. A bundle without shared
+// labels keeps the legacy NO_FAULTS object, so its twins are byte-identical to before.
+function sharedFaultApplier(s: Scenario): FaultApplier {
+  const shared = s.labels.filter((l) => l.level !== 'gpu');
+  return shared.length ? buildApplier(s.seed, shared) : NO_FAULTS;
+}
 
 function faultedGpuSet(s: Scenario): Set<string> {
   const out = new Set<string>();
@@ -384,6 +396,7 @@ export async function streamCounters(
   const gpus = shardRange(s.gpuIds);
   const plan = contaminationPlan(s);
   const triad = triadEnabled(s);
+  const sharedFaults = sharedFaultApplier(s);
   for (const gpu of gpus) {
     const decorr = plan.decorrelated.has(gpu);
     // decorrelated twin uses its OWN id for loadings → λ diverge → the contrast no longer cancels the
@@ -391,20 +404,25 @@ export async function streamCounters(
     const cId = controlIdOf(gpu);
     const c2Id = controlId2Of(gpu);
     const twin: ControlTwin | null = controlArm ? { sf: shardFactors(gpu, s.ctx), loadingId: decorr ? cId : gpu } : null;
-    // The triad's SECOND twin is always matched (shares the treatment's loadings) and never faulted — the
-    // clean sibling that makes c1 − c2 a control-vs-control null (ADR 0022).
+    // The triad's SECOND twin is always matched (shares the treatment's loadings) and never gpu-faulted — the
+    // clean sibling that makes c1 − c2 a control-vs-control null (ADR 0022). It carries the domain's shared
+    // faults like c1 does (C73), so the null survives a cdu/pod event.
     const twin2: ControlTwin | null = triad ? { sf: shardFactors(gpu, s.ctx), loadingId: gpu } : null;
     const contaminated = plan.contaminated.has(gpu);
     // 'control' mode makes the TREATMENT clean (the fault moves to the control); else treatment is normal.
     const treatmentFaults = plan.mode === 'control' && contaminated ? NO_FAULTS : s.applier;
-    // a contaminated control carries the TREATMENT's fault (faultId=gpu) on c1 only, keeping its own noise.
-    const controlFaults = contaminated ? s.applier : NO_FAULTS;
+    // a contaminated control carries the TREATMENT's fault (faultId=gpu) on c1 only, keeping its own noise;
+    // otherwise the twin carries the domain's cdu/pod faults and nothing gpu-level (C73). A decorrelated
+    // twin gets the shared delta at the treatment's λ rather than its own — second-order on a knob whose
+    // purpose is a non-cancelling contrast.
+    const controlFaults = contaminated ? s.applier : sharedFaults;
     for (const counter of SELECTED_COUNTERS) {
       await emitRow(gpu, counter.name, counterTicks(s.seed, gpu, counter, s.ctx, s.graph, treatmentFaults, undefined, undefined, tailDf));
-      // Matched control twin: shared factor instances + loadings, own idiosyncratic noise; NO_FAULTS unless
-      // contaminated (ADR 0021 validation). Twin shares the treatment's tail model — fair like-for-like null.
+      // Matched control twin: shared factor instances + loadings, own idiosyncratic noise; the domain's
+      // shared faults, plus the treatment's gpu fault only when contaminated (ADR 0021 validation). Twin
+      // shares the treatment's tail model — fair like-for-like null.
       if (twin) await emitRow(cId, counter.name, counterTicks(s.seed, cId, counter, s.ctx, s.graph, controlFaults, undefined, twin, tailDf, gpu));
-      if (twin2) await emitRow(c2Id, counter.name, counterTicks(s.seed, c2Id, counter, s.ctx, s.graph, NO_FAULTS, undefined, twin2, tailDf));
+      if (twin2) await emitRow(c2Id, counter.name, counterTicks(s.seed, c2Id, counter, s.ctx, s.graph, sharedFaults, undefined, twin2, tailDf, gpu));
     }
   }
 }
