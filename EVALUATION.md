@@ -91,6 +91,18 @@ control's own id), so only a change statistic is valid here, not a mean. The twi
 make parallel-trends hold bit-for-bit: an idealized best case relative to real-world
 negative-control DiD (NC-DiD 2025), worth stating when reporting.
 
+**What a twin carries (C73, 2026-09-04).** A twin never carries a gpu-level fault
+(unless the ADR 0021 contamination knob puts one there). It does carry the cdu/pod
+faults of the domain it shares with its treatment, realized with the treatment's λ,
+because a shared-infra fault is a factor perturbation and the twin loads on that
+factor. So the contrast cancels shared events as well as the common mode, and a
+per-shard scorer on the contrast must not count a cdu/pod-affected shard as a
+positive. Bundles generated before this date have fault-free twins at every level:
+on them a shared fault leaks into the contrast as `−λ·(perturbation)` for every
+shard under the domain (a cdu detachment put all 288 shards of a four-rack bundle
+on Tessera's action surface), so a contrast score on an older bundle with shared
+events is not comparable to one on a regenerated bundle.
+
 ## Metrics — the only sanctioned scores
 
 - **`precisionRecall(detected, truth)`** — set-valued over shard ids. An
