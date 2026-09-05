@@ -125,12 +125,30 @@ export function shardCovEigenvalues(panel: number[][]): number[] {
   return jacobiEigen(S).values;
 }
 
-// Eigenvalue-ratio estimator of the number of common factors (Ahn & Horenstein
-// 2013; the data-driven K̂ recommended in the FarmTest lineage): K̂ = argmax over
-// k∈[1,kmax] of λ_k / λ_{k+1}. A small floor guards the near-zero idiosyncratic
-// eigenvalues from producing a spurious ratio.
-export function estimateNumFactors(panel: number[][], kmax = 10): number {
-  const eig = shardCovEigenvalues(panel);
+// ── Number of common factors ─────────────────────────────────────────────────
+//
+// Three rules read the same spectrum. The eigenvalue ratio (Ahn & Horenstein
+// 2013) was the reference from Track 4 to C79; C31 found it recovers K̂ ≈ 1.6 on a
+// panel carrying 3–6 factor instances, because the cooling factor is an order of
+// magnitude stronger than the power and job factors and the largest RATIO sits at
+// that dominant gap rather than at the factor/noise edge. C79 (PREREG-c79.md)
+// registered two alternatives and a gate for changing the reference:
+//   'bai-ng-ic2'   Bai & Ng (2002) IC_p2 — the textbook information criterion;
+//   'onatski-ed'   Onatski (2010) edge distribution — thresholds DIFFERENCES
+//                  against the noise edge, so a dominant factor cannot mask a weak
+//                  one; robust to serially correlated idiosyncratic errors.
+// The reference method is REFERENCE_FACTOR_COUNT_METHOD; every rule stays callable
+// by name so any published number is reproducible from the code that made it.
+
+export type FactorCountMethod = 'eigenvalue-ratio' | 'bai-ng-ic2' | 'onatski-ed';
+
+// The method `estimateNumFactors` uses when none is named — the contract's
+// reference. Changed only under PREREG-c79.md's ship gate.
+export const REFERENCE_FACTOR_COUNT_METHOD: FactorCountMethod = 'eigenvalue-ratio';
+
+// Eigenvalue-ratio rule: K̂ = argmax over k∈[1,kmax] of λ_k / λ_{k+1}. A small floor
+// guards the near-zero idiosyncratic eigenvalues from producing a spurious ratio.
+export function factorCountEigenvalueRatio(eig: number[], kmax = 10): number {
   const floor = 1e-8 * (eig[0] ?? 1);
   const lim = Math.min(kmax, eig.length - 1);
   let best = 1;
@@ -145,6 +163,98 @@ export function estimateNumFactors(panel: number[][], kmax = 10): number {
     }
   }
   return best;
+}
+
+// Bai & Ng (2002) IC_p2: K̂ = argmin over k∈[0,kmax] of ln V(k) + k·g(N,T), with
+// V(k) = (1/N)·Σ_{j>k} λ_j the mean residual variance after removing k components
+// (λ are eigenvalues of the N×N covariance (1/T)·XᵀX, so Σ_{j>k} λ_j is the
+// residual sum of squares over N·T) and g = ((N+T)/(N·T))·ln(min(N,T)).
+export function factorCountBaiNgIC2(eig: number[], N: number, T: number, kmax = 10): number {
+  const lim = Math.min(kmax, eig.length - 1);
+  const g = ((N + T) / (N * T)) * Math.log(Math.min(N, T));
+  let tail = 0;
+  for (const v of eig) tail += v;
+  let best = 0;
+  let bestIc = Infinity;
+  for (let k = 0; k <= lim; k++) {
+    if (k > 0) tail -= eig[k - 1]!;
+    const V = Math.max(tail / N, 1e-300);
+    const ic = Math.log(V) + k * g;
+    if (ic < bestIc) {
+      bestIc = ic;
+      best = k;
+    }
+  }
+  return best;
+}
+
+// Onatski (2010) edge-distribution rule. Start at j = kmax+1; regress λ_j..λ_{j+4}
+// on (j−1)^{2/3}..(j+3)^{2/3} (the Tracy–Widom spacing exponent), set δ = 2·|slope|,
+// take K̂(δ) = max{k ≤ kmax : λ_k − λ_{k+1} ≥ δ} (0 if none), then j = K̂+1 and
+// iterate to a fixed point. Needs kmax + 5 eigenvalues.
+export function factorCountOnatskiED(eig: number[], kmax = 10, maxIter = 20): number {
+  const lim = Math.min(kmax, eig.length - 6);
+  if (lim < 1) return 0;
+  const slopeAt = (j: number): number => {
+    // OLS slope of y = λ_j..λ_{j+4} (1-based j) on x = (j−1)^{2/3}..(j+3)^{2/3}
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      xs.push(Math.pow(j - 1 + i, 2 / 3));
+      ys.push(eig[j - 1 + i]!);
+    }
+    const mx = xs.reduce((a, b) => a + b, 0) / 5;
+    const my = ys.reduce((a, b) => a + b, 0) / 5;
+    let sxy = 0;
+    let sxx = 0;
+    for (let i = 0; i < 5; i++) {
+      sxy += (xs[i]! - mx) * (ys[i]! - my);
+      sxx += (xs[i]! - mx) * (xs[i]! - mx);
+    }
+    return sxy / sxx;
+  };
+  const countAt = (delta: number): number => {
+    let k = 0;
+    for (let c = 1; c <= lim; c++) if (eig[c - 1]! - eig[c]! >= delta) k = c;
+    return k;
+  };
+  let j = lim + 1;
+  let khat = -1;
+  for (let it = 0; it < maxIter; it++) {
+    const next = countAt(2 * Math.abs(slopeAt(j)));
+    if (next === khat) break;
+    khat = next;
+    j = khat + 1;
+  }
+  return Math.max(0, khat);
+}
+
+export function factorCountFromSpectrum(
+  eig: number[],
+  N: number,
+  T: number,
+  method: FactorCountMethod,
+  kmax = 10,
+): number {
+  switch (method) {
+    case 'eigenvalue-ratio':
+      return factorCountEigenvalueRatio(eig, kmax);
+    case 'bai-ng-ic2':
+      return factorCountBaiNgIC2(eig, N, T, kmax);
+    case 'onatski-ed':
+      return factorCountOnatskiED(eig, kmax);
+  }
+}
+
+// Data-driven K̂ for a panel (rows = shards, cols = time) under the reference
+// method unless one is named.
+export function estimateNumFactors(
+  panel: number[][],
+  kmax = 10,
+  method: FactorCountMethod = REFERENCE_FACTOR_COUNT_METHOD,
+): number {
+  const eig = shardCovEigenvalues(panel);
+  return factorCountFromSpectrum(eig, panel.length, panel[0]?.length ?? 0, method, kmax);
 }
 
 // Remove the top-k principal components (the estimated common-factor space) from

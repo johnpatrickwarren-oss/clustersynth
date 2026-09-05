@@ -88,6 +88,11 @@ export {
   jacobiEigen,
   shardCovEigenvalues,
   estimateNumFactors,
+  factorCountFromSpectrum,
+  factorCountEigenvalueRatio,
+  factorCountBaiNgIC2,
+  factorCountOnatskiED,
+  REFERENCE_FACTOR_COUNT_METHOD,
   pcaResiduals,
   mean,
   lag1,
@@ -114,7 +119,7 @@ export {
   magnitudeScoreBaseline,
   pointAdjustedF1_BANNED,
 } from './harness/evaluation.js';
-export type { Eigen, PrecisionRecall, ResolutionMetric } from './harness/evaluation.js';
+export type { Eigen, PrecisionRecall, ResolutionMetric, FactorCountMethod } from './harness/evaluation.js';
 export type {
   FactorKind,
   CounterSpec,
