@@ -47,7 +47,7 @@ const cells = (s) => s.split('|').map((x) => x.trim()).filter(Boolean);
   for (const line of report.split('\n')) {
     // Recovery table: | cell | K mean (min–max) | ER K̂ / |err| / exact% | IC ... | ED ... |
     let m = line.match(/^\|\s*([a-z_]+@\d+)\s*\|\s*([\d.]+) \((\d+)–(\d+)\)\s*\|(.+)\|\s*$/);
-    if (m && m[5].split('|').filter((x) => x.trim()).length === 3 && m[5].split('/').length === 9) {
+    if (m && m[5].split('|').filter((x) => x.trim()).length === 3 && m[5].split('/').length === 7) {
       const [, cell, kMean, kMin, kMax, rest] = m;
       const c = byCell.get(cell);
       if (!c) { fails.push(`recovery row for unknown cell ${cell}`); continue; }

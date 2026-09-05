@@ -43,8 +43,11 @@ This contract reflects the 2021–2026 literature review in `REALISM-PLAN.md`
   regress counters on the true factor series (`olsResiduals`). Calibrates the best
   case.
 - **Adversarial / factors-hidden** (`factorsHidden: true`): no factor sidecar. The
-  detector estimates the number of common factors `K̂` (`estimateNumFactors`,
-  eigenvalue-ratio criterion) and removes them (`pcaResiduals`). Heterogeneous
+  detector estimates the number of common factors `K̂` (`estimateNumFactors`;
+  since C79, 2026-09-04, Onatski's edge-distribution rule — the eigenvalue-ratio
+  criterion used until then stopped at the dominant cooling gap and left three to
+  five factor directions in the residual, `runs/factor-count/REPORT.md`; it stays
+  callable as `method: 'eigenvalue-ratio'`) and removes them (`pcaResiduals`). Heterogeneous
   loadings make the common mode unremovable by mean-subtraction, so this is the
   honest test. *A detector that controls FPR here, not just in oracle mode, is the
   one that has earned trust.*
@@ -172,7 +175,13 @@ reading a surface.
   at high nonlinear severity. Under rule 2 above they are not detecting.
 - **The in-family baseline is itself a finding**: `hidden-cusum-bh` realizes 84% FDR at `q = 0.10`,
   because `estimateNumFactors` recovers `K̂ ≈ 1.6` against four factor kinds. Pre-existing, exposed
-  by this run's baseline column, not introduced by it.
+  by this run's baseline column, not introduced by it. *Repaired under C79 (2026-09-04): the
+  eigenvalue-ratio rule was the defect ("four factor kinds" was imprecise — the panel carries 3–7
+  factor instances of three loaded kinds, and the rule stopped at the dominant one); the
+  edge-distribution rule ships as the reference and the in-family FPR is 0.0%.
+  `runs/factor-count/REPORT.md`; the surface re-measured under the shipped estimator, and the
+  repaired switching axis, are `runs/out-of-family/REPORT-c79.md`. The C31 report above is the
+  record of the pipeline at `c1387a4` and is not edited.*
 
 ### What this regime still cannot claim
 
