@@ -143,8 +143,11 @@ export function shardCovEigenvalues(panel: number[][]): number[] {
 export type FactorCountMethod = 'eigenvalue-ratio' | 'bai-ng-ic2' | 'onatski-ed';
 
 // The method `estimateNumFactors` uses when none is named — the contract's
-// reference. Changed only under PREREG-c79.md's ship gate.
-export const REFERENCE_FACTOR_COUNT_METHOD: FactorCountMethod = 'eigenvalue-ratio';
+// reference. Changed only under PREREG-c79.md's ship gate: 'onatski-ed' shipped on
+// 2026-09-04 (runs/factor-count/REPORT.md — FDR ≤ q + 3se at every gated cell,
+// mean |K̂−K| 0.02 against the ratio's 0.80 and IC2's 2.07). Numbers published
+// before that date were produced with 'eigenvalue-ratio'.
+export const REFERENCE_FACTOR_COUNT_METHOD: FactorCountMethod = 'onatski-ed';
 
 // Eigenvalue-ratio rule: K̂ = argmax over k∈[1,kmax] of λ_k / λ_{k+1}. A small floor
 // guards the near-zero idiosyncratic eigenvalues from producing a spurious ratio.

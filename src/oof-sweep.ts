@@ -20,6 +20,8 @@ import {
   olsResiduals,
   pcaResiduals,
   estimateNumFactors,
+  REFERENCE_FACTOR_COUNT_METHOD,
+  type FactorCountMethod,
   maxAbsCusum,
   longRunVarianceAR1,
   supBrownianBridgePValue,
@@ -94,7 +96,7 @@ interface RunOutcome {
   scores: { random: Map<string, number>; magnitude: number[] };
 }
 
-function scoreRun(scn: ReturnType<typeof buildScenario>): RunOutcome {
+function scoreRun(scn: ReturnType<typeof buildScenario>, method: FactorCountMethod): RunOutcome {
   const ids = scn.gpuIds;
   const Y = ids.map(
     (g) => realizeShard(scn.seed, g, scn.ctx, scn.graph, scn.applier, undefined, scn.tailDf)[COUNTER]!,
@@ -103,7 +105,7 @@ function scoreRun(scn: ReturnType<typeof buildScenario>): RunOutcome {
   // oracle regime — regress on the true factor series
   const oracleResid = ids.map((g, i) => olsResiduals(Y[i]!, oracleCols(scn, g)));
   // factors-hidden regime — estimate K̂ and project the panel's top-K̂ PCs away
-  const khat = estimateNumFactors(Y);
+  const khat = estimateNumFactors(Y, 10, method);
   const hiddenResid = pcaResiduals(Y, khat);
 
   const pOracle = cusumPValues(oracleResid);
@@ -153,7 +155,8 @@ function topM(ids: string[], score: (i: number) => number, m: number): string[] 
 // For gpu_temp_c the common mode dwarfs the idiosyncratic noise, so `s` is not a
 // small number in the units that matter. Measured per cell rather than asserted —
 // which also makes visible whether an axis MOVES the common-mode variance (axis S
-// does, by construction: its second state has stationary sd 1 + 3s).
+// did as registered for C31 — its second state had stationary sd 1 + 3s — and
+// must not after C79's re-registration).
 function commonModeSd(scn: ReturnType<typeof buildScenario>): number {
   const varOf = (x: number[]) => {
     const m = x.reduce((s, v) => s + v, 0) / x.length;
@@ -178,6 +181,10 @@ interface Cell {
   cell: string;
   axis: 'none' | (typeof AXES)[number];
   severity: number;
+  // which factor-count rule the hidden detectors used (C79: the sweep can run a
+  // named rule beside the reference; the C31 run had no such field and used the
+  // eigenvalue ratio, the reference at the time)
+  estimator: FactorCountMethod;
   // true ⇒ NOT pre-registered. Added after the frozen sweep to locate the knee on
   // axis N; it changes no pre-registered endpoint and is reported separately.
   exploratory?: true;
@@ -197,7 +204,7 @@ interface Cell {
   baselines: Record<string, { precision: number; recall: number }>;
 }
 
-function runCell(axis: Cell['axis'], severity: number, exploratory?: true): Cell {
+function runCell(axis: Cell['axis'], severity: number, method: FactorCountMethod, exploratory?: true): Cell {
   const oof: OutOfFamilySpec | undefined = axis === 'none' ? undefined : { [axis]: severity };
 
   const acc: Record<string, { fpNull: number; nNull: number; tp: number; fp: number; nPos: number }> =
@@ -217,7 +224,7 @@ function runCell(axis: Cell['axis'], severity: number, exploratory?: true): Cell
     const nullScn = buildScenario({ ...BASE, seed, faults: false, outOfFamily: oof });
     resolvedTailDf = nullScn.tailDf ?? null;
     if (seed === SEEDS[0]) commonSd = commonModeSd(nullScn);
-    const nullOut = scoreRun(nullScn);
+    const nullOut = scoreRun(nullScn, method);
     khatNull += nullOut.khat;
     nShards = nullOut.ids.length;
     for (const d of DETECTORS) {
@@ -228,7 +235,7 @@ function runCell(axis: Cell['axis'], severity: number, exploratory?: true): Cell
     // ── fault run: matched labels (identical across cells at this seed) ──
     const fScn = buildScenario({ ...BASE, seed, faults: FAULTS, outOfFamily: oof });
     const pos = positives(fScn.labels);
-    const fOut = scoreRun(fScn);
+    const fOut = scoreRun(fScn, method);
     khatFault += fOut.khat;
     for (const d of DETECTORS) {
       fOut.rejected[d].forEach((rej, i) => {
@@ -251,10 +258,12 @@ function runCell(axis: Cell['axis'], severity: number, exploratory?: true): Cell
   }
 
   const n = SEEDS.length;
+  const suffix = method === REFERENCE_FACTOR_COUNT_METHOD ? '' : `#${method}`;
   return {
-    cell: axis === 'none' ? 'in-family' : `${axis}@${severity}`,
+    cell: (axis === 'none' ? 'in-family' : `${axis}@${severity}`) + suffix,
     axis,
     severity,
+    estimator: method,
     ...(exploratory ? { exploratory } : {}),
     resolvedTailDf,
     seeds: n,
@@ -303,6 +312,16 @@ function main(): void {
     throw new Error(`${dir} exists — results are append-only; pass a new --run-id`);
   }
 
+  // C79: `--axes a,b` restricts the sweep; `--estimator m[,m2]` runs it under the
+  // named factor-count rule(s). Defaults reproduce the C31 shape under the reference.
+  const axesIdx = argv.indexOf('--axes');
+  const axes = (axesIdx >= 0 ? argv[axesIdx + 1]!.split(',') : [...AXES]).map((a) => {
+    if (!(AXES as readonly string[]).includes(a)) throw new Error(`unknown axis ${a}`);
+    return a as (typeof AXES)[number];
+  });
+  const estIdx = argv.indexOf('--estimator');
+  const methods = (estIdx >= 0 ? argv[estIdx + 1]!.split(',') : [REFERENCE_FACTOR_COUNT_METHOD]) as FactorCountMethod[];
+
   const cells: Cell[] = [];
   const push = (c: Cell) => {
     cells.push(c);
@@ -313,14 +332,18 @@ function main(): void {
     );
   };
   process.stderr.write('cell                 K̂     FPR%/power% per detector\n');
-  push(runCell('none', 0));
-  for (const axis of AXES) for (const s of SEVERITIES) push(runCell(axis, s));
-  // Exploratory, NOT pre-registered: the frozen ladder starts at 0.25, which the
-  // diagnostics show is already a large perturbation in residual-sd units. These
-  // three cells locate where axis N's collapse begins. Flagged in the output and
-  // reported in their own section; no pre-registered endpoint is restated from them.
-  process.stderr.write('--- exploratory (not pre-registered) ---\n');
-  for (const s of [0.02, 0.05, 0.1]) push(runCell('nonlinear', s, true));
+  for (const method of methods) {
+    push(runCell('none', 0, method));
+    for (const axis of axes) for (const s of SEVERITIES) push(runCell(axis, s, method));
+    // Exploratory, NOT pre-registered: the frozen ladder starts at 0.25, which the
+    // diagnostics show is already a large perturbation in residual-sd units. These
+    // three cells locate where axis N's collapse begins. Flagged in the output and
+    // reported in their own section; no pre-registered endpoint is restated from them.
+    if (axes.includes('nonlinear')) {
+      process.stderr.write('--- exploratory (not pre-registered) ---\n');
+      for (const s of [0.02, 0.05, 0.1]) push(runCell('nonlinear', s, method, true));
+    }
+  }
 
   const manifest = {
     register: 'C31',
@@ -329,11 +352,14 @@ function main(): void {
     contract: 'EVALUATION.md',
     codeSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     dirty: execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim().length > 0,
-    command: `npx tsx src/oof-sweep.ts --run-id ${runId}`,
+    command: `npx tsx src/oof-sweep.ts --run-id ${runId}${axesIdx >= 0 ? ` --axes ${axes.join(',')}` : ''}${estIdx >= 0 ? ` --estimator ${methods.join(',')}` : ''}`,
     node: process.version,
     seedScheme: 'SEEDS[i] = 31000 + i, i ∈ [0,16)',
     substrate: 'clustersynth in-repo generator (no external data; compute-only)',
     diagnostics: { faultMidpointInNoiseSd: FAULT_MIDPOINT_IN_NOISE_SD },
+    estimators: methods,
+    referenceEstimator: REFERENCE_FACTOR_COUNT_METHOD,
+    axes,
     run: {
       seeds: SEEDS,
       counter: COUNTER,

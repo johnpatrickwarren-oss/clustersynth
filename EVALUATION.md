@@ -140,7 +140,7 @@ buildScenario({ ..., outOfFamily: { nonlinear: 0.5, heavyTails: 0.75, switching:
 |---|---|---|
 | `nonlinear` | the factor response is linear and identically shaped for every shard | the shard's response becomes `√(1−s²)·f + s·(u·saturation + v·rectification)`, with `(u,v)` fixed per (shard, counter, factor kind). The two nonlinear directions are Gram–Schmidt'd against `f` **over the window**, so window mean and variance of the common mode are preserved *exactly* — and the remainder is orthogonal to the true factor series, which is what makes the violation reach the **oracle** regime |
 | `heavyTails` | idiosyncratic innovations are Gaussian | standardized Student-t innovations at `df = round(3 + 12(1−s))`; the shipped `heavyTails.df` mechanism, adopted as one arm. Stationary variance preserved, only kurtosis rises |
-| `switching` | each factor is one stationary OU with one `φ` | two-state hidden Markov modulation of the factor's own dynamics (state 1: `τ/4`, stationary sd `1+3s`), hazard `s/300` per second |
+| `switching` | each factor is one stationary OU with one `φ` | two-state hidden Markov modulation of the factor's own dynamics (state 1: `τ/4` at the **same** stationary sd), hazard `s/300` per second. *Re-registered under C79 (`PREREG-c79.md` Part 2): as registered for C31 state 1 carried sd `1+3s`, which confounded switching with a larger common mode; the C31 run is the record of that construction* |
 
 The scorer and the contract are **unchanged**. `src/harness/evaluation.ts` was not edited for this;
 the sweep only calls it. The regime is recorded in `labels.json` — which is scoring-only and never

@@ -74,14 +74,19 @@ export function tailDfForSeverity(s: number): number | undefined {
 // Axis S — regime-switching factor dynamics.
 //
 // Two states over the factor's OWN dynamics: state 0 is the shipped OU
-// (τ_kind, σ = 1); state 1 is faster and more volatile (τ_kind/4, σ = 1+3s).
+// (τ_kind, σ = 1); state 1 is faster (τ_kind/4) at the SAME stationary sd.
 // Symmetric hazard s/300 per wall-clock second ⇒ per-tick p = 1 − exp(−rate·dt_s).
 // The chain draws from a PRNG stream keyed separately from the factor's own, so
 // at s = 0 the factor's stream is untouched and the series is byte-identical.
+//
+// Re-registered under C79 (PREREG-c79.md Part 2). As registered for C31, state 1
+// carried stationary sd 1 + 3s, which confounded "regime switching" with "a much
+// larger common mode" (14.5 → 41.2 residual-sd) and made every detector improve.
+// Switching now changes the factor's dynamics and not its size. The C31 run
+// (`runs/out-of-family/run-2026-08-05`) is the record of the old construction.
 // ────────────────────────────────────────────────────────────────────────────
 
 const SWITCH_TAU_RATIO = 4; // state 1 mean-reverts this much faster
-const SWITCH_SD_GAIN = 3; // state 1 stationary sd = 1 + gain·s
 const SWITCH_HAZARD_PER_S = 1 / 300; // scaled by s
 
 export interface SwitchingPlan {
@@ -102,13 +107,12 @@ export function switchingPlan(
   const sev = severityOf(s, 'switching');
   if (sev === 0) return null;
   const tau1 = tau / SWITCH_TAU_RATIO;
-  const sd1 = 1 + SWITCH_SD_GAIN * sev;
   const phi0 = Math.exp(-dt_s / tau);
   const phi1 = Math.exp(-dt_s / tau1);
   return {
     phi: [phi0, phi1],
-    // innovation sd giving stationary sd σ_j in state j: σ_j·√(1−φ_j²)
-    innov: [Math.sqrt(1 - phi0 * phi0), sd1 * Math.sqrt(1 - phi1 * phi1)],
+    // innovation sd giving stationary sd 1 in BOTH states: √(1−φ_j²)
+    innov: [Math.sqrt(1 - phi0 * phi0), Math.sqrt(1 - phi1 * phi1)],
     pSwitch: 1 - Math.exp(-sev * SWITCH_HAZARD_PER_S * dt_s),
     rng: rngFor(seed, `oof:switch:${factorId}`),
   };
