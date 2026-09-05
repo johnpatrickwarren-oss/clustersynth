@@ -1,5 +1,14 @@
 # Out-of-family regime — the degradation surface
 
+> **Record of the pipeline at `c1387a4`, superseded in two places by C79 (2026-09-04).** Every
+> `hidden-*` column and `K̂` below was produced with the eigenvalue-ratio factor-count rule, which
+> C79 found to be the defect behind the in-family baseline row (`runs/factor-count/REPORT.md`);
+> the reference is now Onatski's edge-distribution rule. The `switching` axis below is the
+> confounded construction (state 1 at stationary sd `1 + 3s`); it was re-registered with the sd
+> held equal. The surface under the shipped estimator and the repaired axis is
+> [`REPORT-c79.md`](REPORT-c79.md). Nothing below is edited; `analysis/check-report.mjs` still
+> pins it to `run-2026-08-05/`.
+
 Register item **C31**. Pre-registration: [`../../PREREG-out-of-family.md`](../../PREREG-out-of-family.md),
 committed at `31683a5` before any generator code existed. Run: `run-2026-08-05/`.
 Every number below is pinned to `run-2026-08-05/results.json` by

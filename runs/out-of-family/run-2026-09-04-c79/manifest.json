@@ -1,0 +1,79 @@
+{
+  "register": "C31",
+  "runId": "2026-09-04-c79",
+  "prereg": "PREREG-out-of-family.md",
+  "contract": "EVALUATION.md",
+  "codeSha": "382d75d3e12173aa3549aee67977339b76736e48",
+  "dirty": true,
+  "command": "npx tsx src/oof-sweep.ts --run-id 2026-09-04-c79 --estimator onatski-ed,eigenvalue-ratio",
+  "node": "v25.9.0",
+  "seedScheme": "SEEDS[i] = 31000 + i, i ∈ [0,16)",
+  "substrate": "clustersynth in-repo generator (no external data; compute-only)",
+  "diagnostics": {
+    "faultMidpointInNoiseSd": 6
+  },
+  "estimators": [
+    "onatski-ed",
+    "eigenvalue-ratio"
+  ],
+  "referenceEstimator": "onatski-ed",
+  "axes": [
+    "nonlinear",
+    "heavyTails",
+    "switching"
+  ],
+  "run": {
+    "seeds": [
+      31000,
+      31001,
+      31002,
+      31003,
+      31004,
+      31005,
+      31006,
+      31007,
+      31008,
+      31009,
+      31010,
+      31011,
+      31012,
+      31013,
+      31014,
+      31015
+    ],
+    "counter": "gpu_temp_c",
+    "q": 0.1,
+    "base": {
+      "family": "gb200",
+      "pods": 1,
+      "racksPerPod": 2,
+      "window": {
+        "steps": 240
+      },
+      "nonstationarity": [
+        "thermal",
+        "diurnal",
+        "regime"
+      ]
+    },
+    "faults": {
+      "rate": 0.15,
+      "levels": [
+        "gpu"
+      ],
+      "types": [
+        "mean_shift",
+        "drift"
+      ],
+      "sharedFaults": 0
+    },
+    "detectors": [
+      "oracle-cusum-bh",
+      "hidden-cusum-bh",
+      "hidden-cusum-ebh",
+      "hidden-ar1-halves-bh",
+      "baseline-random",
+      "baseline-magnitude"
+    ]
+  }
+}
